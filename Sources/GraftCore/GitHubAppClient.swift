@@ -26,10 +26,17 @@ public struct GitHubAppClient: Sendable {
         self.apiBase = apiBase
     }
 
-    /// Generate a single-use JIT runner config for `pool`. The returned blob goes
-    /// straight to `./run.sh --jitconfig <blob>` on the VM — no `config.sh`, and the
-    /// runner is ephemeral by construction.
-    public func generateJITConfig(pool: PoolConfig, runnerName: String) async throws -> String {
+    /// A freshly-minted JIT runner: its server-side id (for cleanup) and the encoded
+    /// config blob for `./run.sh --jitconfig`.
+    public struct JITRunner: Sendable {
+        public let runnerID: Int
+        public let encodedConfig: String
+    }
+
+    /// Create a single-use JIT runner for `pool`. Generating the config registers a
+    /// runner entity on GitHub (id returned for cleanup); the blob is ephemeral by
+    /// construction — `./run.sh --jitconfig <blob>`, no `config.sh`.
+    public func generateJITRunner(pool: PoolConfig, runnerName: String) async throws -> JITRunner {
         let target = try pool.github.parsedTarget()
         let token = try await installationAccessToken(for: target)
         let body: [String: Any] = [
@@ -44,31 +51,57 @@ public struct GitHubAppClient: Sendable {
             bearer: token,
             json: body
         )
-        struct Response: Decodable { let encodedJITConfig: String
-            enum CodingKeys: String, CodingKey { case encodedJITConfig = "encoded_jit_config" }
+        struct Response: Decodable {
+            struct Runner: Decodable { let id: Int }
+            let runner: Runner
+            let encodedJITConfig: String
+            enum CodingKeys: String, CodingKey {
+                case runner
+                case encodedJITConfig = "encoded_jit_config"
+            }
         }
-        return try JSONDecoder().decode(Response.self, from: data).encodedJITConfig
+        let decoded = try JSONDecoder().decode(Response.self, from: data)
+        return JITRunner(runnerID: decoded.runner.id, encodedConfig: decoded.encodedJITConfig)
     }
 
-    // MARK: Auth chain
+    /// Just the JIT blob — the supervisor's hot path.
+    public func generateJITConfig(pool: PoolConfig, runnerName: String) async throws -> String {
+        try await generateJITRunner(pool: pool, runnerName: runnerName).encodedConfig
+    }
 
-    /// Discover the installation for `target` and exchange the App JWT for a
-    /// short-lived installation access token.
-    func installationAccessToken(for target: GitHubTarget) async throws -> String {
+    /// Remove a runner by id (cleanup for offline/probe runners).
+    public func deleteRunner(id: Int, target: GitHubTarget) async throws {
+        let token = try await installationAccessToken(for: target)
+        _ = try await request("DELETE", path: "\(target.apiPath)/actions/runners/\(id)", bearer: token)
+    }
+
+    // MARK: Auth chain (each step public so `graft doctor` can report it)
+
+    /// Read the PEM from the secret store and sign the App JWT.
+    public func makeAppJWT() async throws -> String {
+        try await appJWT()
+    }
+
+    /// Discover the App's installation id for `target`.
+    public func installationID(for target: GitHubTarget) async throws -> Int {
         let jwt = try await appJWT()
-
         struct Installation: Decodable { let id: Int }
-        let installationData = try await request("GET", path: "\(target.apiPath)/installation", bearer: jwt)
-        let installation = try JSONDecoder().decode(Installation.self, from: installationData)
+        let data = try await request("GET", path: "\(target.apiPath)/installation", bearer: jwt)
+        return try JSONDecoder().decode(Installation.self, from: data).id
+    }
 
+    /// Exchange the App JWT for a short-lived installation access token.
+    public func installationAccessToken(for target: GitHubTarget) async throws -> String {
+        let installationID = try await installationID(for: target)
+        let jwt = try await appJWT()
         struct TokenResponse: Decodable { let token: String }
-        let tokenData = try await request(
+        let data = try await request(
             "POST",
-            path: "app/installations/\(installation.id)/access_tokens",
+            path: "app/installations/\(installationID)/access_tokens",
             bearer: jwt,
             json: [:]
         )
-        return try JSONDecoder().decode(TokenResponse.self, from: tokenData).token
+        return try JSONDecoder().decode(TokenResponse.self, from: data).token
     }
 
     private func appJWT() async throws -> String {
