@@ -6,30 +6,31 @@ import GraftCore
 /// without booting a VM: read key → sign JWT → find installation → mint token →
 /// create a probe JIT runner → delete it. Leaves no trace on the org.
 ///
-/// Runs straight from flags (`--app-id` + `--target`) with no config file, or
-/// against the config's pools when those are omitted.
+/// Run it bare and it picks the App from the keys in your keychain and prompts for
+/// the target; or pass `--app-id`/`--target` to skip the prompts; or `--config`/
+/// `--pool` to check pools from a config file.
 struct Doctor: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "doctor",
         abstract: "Verify the GitHub App auth chain end-to-end (no VM boot)."
     )
 
-    @Option(name: .long, help: "GitHub App ID to check (skips the config file; needs --target too).")
+    @Option(name: .long, help: "GitHub App ID (default: pick from keys in the keychain).")
     var appId: Int?
 
-    @Option(name: .long, help: "Where runners register: 'org:NAME' or 'repo:OWNER/NAME' (with --app-id).")
+    @Option(name: .long, help: "Where runners register: 'org:NAME' or 'repo:OWNER/NAME' (default: prompt).")
     var target: String?
 
     @Option(name: .long, help: "Runner group id for the probe runner (default 1).")
     var runnerGroupId: Int = 1
 
-    @Option(name: .shortAndLong, help: "Config path (used when --app-id/--target are omitted).")
+    @Option(name: .shortAndLong, help: "Check pools from this config file instead of the keychain.")
     var config: String?
 
-    @Option(name: .long, help: "Only check this pool from the config (default: all pools).")
+    @Option(name: .long, help: "With --config, only check this pool.")
     var pool: String?
 
-    @Flag(help: "Read the key from the system keychain instead of login.")
+    @Flag(help: "Use the system keychain instead of login.")
     var system = false
 
     @Flag(help: "Stop after minting a token — don't create/delete a probe runner.")
@@ -39,15 +40,8 @@ struct Doctor: AsyncParsableCommand {
         let pools: [PoolConfig]
         let scope: KeychainScope
 
-        if let appId, let target {
-            pools = [PoolConfig(
-                name: "cli", image: "-", os: .macOS, count: 0,
-                github: GitHubConfig(appId: appId, target: target, runnerGroupId: runnerGroupId)
-            )]
-            scope = system ? .system : .login
-        } else if appId != nil || target != nil {
-            throw GraftError("pass BOTH --app-id and --target, or neither (to use the config file)")
-        } else {
+        if config != nil || pool != nil {
+            // Config mode.
             let path = GraftConfig.resolvePath(explicit: config)
             let cfg = try GraftConfig.load(from: path)
             let filtered = pool.map { name in cfg.pools.filter { $0.name == name } } ?? cfg.pools
@@ -56,6 +50,15 @@ struct Doctor: AsyncParsableCommand {
             }
             pools = filtered
             scope = system ? .system : (KeychainScope(rawValue: cfg.secrets?.scope ?? "login") ?? .login)
+        } else {
+            // Direct mode: App ID from flag or keychain picker; target from flag or prompt.
+            scope = system ? .system : .login
+            let resolvedAppID = try appId ?? Self.pickAppID(scope: scope)
+            let resolvedTarget = try target ?? Self.promptTarget()
+            pools = [PoolConfig(
+                name: "cli", image: "-", os: .macOS, count: 0,
+                github: GitHubConfig(appId: resolvedAppID, target: resolvedTarget, runnerGroupId: runnerGroupId)
+            )]
         }
 
         let secrets = KeychainSecretStore(scope: scope)
@@ -101,5 +104,38 @@ struct Doctor: AsyncParsableCommand {
 
         if failed { throw ExitCode.failure }
         print("\nall checks passed ✓  — GitHub App auth is wired correctly")
+    }
+
+    // MARK: Interactive pickers
+
+    /// Choose an App ID from the keys stored in the keychain. Auto-selects when
+    /// there's only one. Listing reads attributes only — no Keychain prompt here.
+    private static func pickAppID(scope: KeychainScope) throws -> Int {
+        let ids = try KeychainSecretStore(scope: scope).storedAppIDs()
+        guard !ids.isEmpty else {
+            throw GraftError("no App keys in the \(scope.rawValue) keychain — run `graft secrets import --app-id <ID> --pem <path>`")
+        }
+        if ids.count == 1 {
+            printErr("using app \(ids[0]) (only key in the \(scope.rawValue) keychain)")
+            return ids[0]
+        }
+        printErr("App keys in the \(scope.rawValue) keychain:")
+        for (index, id) in ids.enumerated() { printErr("  [\(index + 1)] \(id)") }
+        while true {
+            FileHandle.standardError.write(Data("pick one [1-\(ids.count)]: ".utf8))
+            guard let line = readLine() else { throw GraftError("no selection made") }
+            if let choice = Int(line.trimmingCharacters(in: .whitespaces)), (1...ids.count).contains(choice) {
+                return ids[choice - 1]
+            }
+            printErr("  not a valid choice")
+        }
+    }
+
+    private static func promptTarget() throws -> String {
+        FileHandle.standardError.write(Data("target (org:NAME or repo:OWNER/NAME): ".utf8))
+        guard let line = readLine()?.trimmingCharacters(in: .whitespaces), !line.isEmpty else {
+            throw GraftError("no target given")
+        }
+        return line
     }
 }
