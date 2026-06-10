@@ -43,6 +43,20 @@ public struct LocalTartProvider: VMProvider {
         try await Tart.delete(name: vm.name)
     }
 
+    public func exec(on vm: RunningVM, _ command: [String]) async throws -> ShellResult {
+        try await Shell.run(Tart.executable, ["exec", vm.name] + command)
+    }
+
+    public func execStreaming(on vm: RunningVM, script: String) async throws -> Int32 {
+        // `tart exec -i <name> bash -s` runs the script on stdin inside the guest;
+        // stdout/stderr stream straight through, exit code propagates back.
+        try await Shell.runStreaming(
+            Tart.executable,
+            ["exec", "-i", vm.name, "bash", "-s"],
+            stdin: script
+        )
+    }
+
     /// VMs graft created on this host (by name prefix). Backs `graft vm list`.
     public func graftManagedVMs() async throws -> [TartVM] {
         try await Tart.list().filter { $0.name.hasPrefix(Self.namePrefix) }

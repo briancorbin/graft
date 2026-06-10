@@ -85,6 +85,42 @@ public enum Shell {
         return result.stdoutTrimmed
     }
 
+    /// Run a command with stdout/stderr inherited by this process (so output
+    /// streams live, e.g. a runner's job logs into the launchd log) and an optional
+    /// string fed to stdin. Blocks until the command exits; returns its exit code.
+    public static func runStreaming(
+        _ executable: String,
+        _ arguments: [String] = [],
+        stdin: String? = nil,
+        environment: [String: String]? = nil
+    ) async throws -> Int32 {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = [executable] + arguments
+        process.environment = environment ?? ProcessInfo.processInfo.environment
+        process.standardOutput = FileHandle.standardOutput
+        process.standardError = FileHandle.standardError
+
+        let inputPipe = Pipe()
+        if stdin != nil { process.standardInput = inputPipe }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            // Set before run() so we never miss a fast-exiting process.
+            process.terminationHandler = { continuation.resume(returning: $0.terminationStatus) }
+            do {
+                try process.run()
+                if let stdin {
+                    let handle = inputPipe.fileHandleForWriting
+                    handle.write(Data(stdin.utf8))
+                    try? handle.close()
+                }
+            } catch {
+                process.terminationHandler = nil
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+
     /// Launch a command fully detached (`nohup … &`) so it survives this process
     /// exiting. Used for `tart run`, where the VM stays alive only as long as the
     /// run process does — and we want `graft vm create` to return while it keeps

@@ -15,4 +15,27 @@ public protocol VMProvider: Sendable {
     /// Stop and destroy a VM. Idempotent where possible — releasing an
     /// already-gone VM should not throw.
     func release(_ vm: RunningVM) async throws
+
+    /// Run a short command in the guest and capture its output. The provider owns
+    /// the channel — Tart uses `tart exec` (Guest Agent), Orchard its own transport.
+    func exec(on vm: RunningVM, _ command: [String]) async throws -> ShellResult
+
+    /// Run a script in the guest, streaming its output to this process, and return
+    /// the remote exit code. Blocks until the command exits — this is how we run the
+    /// ephemeral runner and wait for its single job to finish.
+    func execStreaming(on vm: RunningVM, script: String) async throws -> Int32
+}
+
+extension VMProvider {
+    /// Wait until the guest can run commands (Guest Agent up). Replaces SSH-port
+    /// probing — readiness is "can I exec", nothing more.
+    public func waitForGuest(_ vm: RunningVM, timeout: Duration = .seconds(60)) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while clock.now < deadline {
+            if let result = try? await exec(on: vm, ["true"]), result.succeeded { return }
+            try await Task.sleep(for: .seconds(2))
+        }
+        throw GraftError("guest on \(vm.name) wasn't ready to exec within \(timeout)")
+    }
 }
