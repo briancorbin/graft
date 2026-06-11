@@ -16,6 +16,32 @@ public protocol RunnerRunner: Sendable {
 extension GitHubAppClient: JITConfigProvider {}
 extension RunnerProvisioner: RunnerRunner {}
 
+/// What a runner slot is currently doing — surfaced to an optional status reporter
+/// so a live UI (the `graft run` spinner dashboard) can show per-slot progress.
+public enum RunnerPhase: Sendable {
+    case acquiring          // cloning + booting the VM
+    case running            // runner is up; jobs flow through it
+    case deregistering      // removing the JIT runner from GitHub
+    case stopping           // stopping + deleting the VM
+    case retrying           // acquire failed; backing off
+    case done               // slot exited (remove its row)
+
+    public var label: String {
+        switch self {
+        case .acquiring: return "booting VM"
+        case .running: return "running"
+        case .deregistering: return "deregistering runner"
+        case .stopping: return "stopping VM"
+        case .retrying: return "retrying…"
+        case .done: return "done"
+        }
+    }
+}
+
+/// Per-slot progress callback: `(slotTag, vmName?, phase)`. Invoked from multiple
+/// slot tasks concurrently, so conformers must be thread-safe.
+public typealias RunnerStatusReporter = @Sendable (String, String?, RunnerPhase) -> Void
+
 /// The desired-state loop. Keeps each pool filled to its runner count, respecting
 /// the host's per-OS capacity (Apple's 2-macOS-VM limit, budgeted across pools).
 /// Each slot runs the full ephemeral loop forever: acquire → JIT → run one job →
@@ -26,6 +52,7 @@ public actor PoolSupervisor {
     private let github: @Sendable (Int) -> any JITConfigProvider
     private let runner: any RunnerRunner
     private let state: StateManager
+    private let status: RunnerStatusReporter?
     private var runners: [String: RunnerRecord] = [:]
     /// VMs currently being torn down — so the shutdown watcher and a slot's own
     /// teardown can't both fire `tart stop`/`delete` on the same VM and wedge tart
@@ -39,13 +66,15 @@ public actor PoolSupervisor {
         provider: any VMProvider,
         github: @escaping @Sendable (Int) -> any JITConfigProvider,
         runner: any RunnerRunner,
-        state: StateManager = StateManager()
+        state: StateManager = StateManager(),
+        status: RunnerStatusReporter? = nil
     ) {
         self.config = config
         self.provider = provider
         self.github = github
         self.runner = runner
         self.state = state
+        self.status = status
     }
 
     /// Convenience for the production path: GitHub App clients backed by `secrets`,
@@ -54,14 +83,16 @@ public actor PoolSupervisor {
         config: GraftConfig,
         provider: any VMProvider,
         secrets: any SecretStore,
-        state: StateManager = StateManager()
+        state: StateManager = StateManager(),
+        status: RunnerStatusReporter? = nil
     ) {
         self.init(
             config: config,
             provider: provider,
             github: { appID in GitHubAppClient(appID: appID, secrets: secrets) },
             runner: RunnerProvisioner(provider: provider),
-            state: state
+            state: state,
+            status: status
         )
     }
 
@@ -107,15 +138,18 @@ public actor PoolSupervisor {
     private func runSlot(pool: PoolConfig, index: Int) async {
         let github = github(pool.github.appId)
         let tag = "\(pool.name)#\(index)"
+        func report(_ phase: RunnerPhase, _ vm: String? = nil) { status?(tag, vm, phase) }
 
         while !Task.isCancelled {
             do {
+                report(.acquiring)
                 let vm = try await provider.acquire(image: pool.image, os: pool.os)
                 track(vm, pool: pool.name)
                 Log.info("[\(tag)] acquired \(vm.name) (\(vm.ip))")
 
                 var runnerID: Int?
                 do {
+                    report(.running, vm.name)
                     let jit = try await github.generateJITRunner(pool: pool, runnerName: vm.name)
                     runnerID = jit.runnerID
                     let exitCode = try await runner.runEphemeralRunner(on: vm, jitConfig: jit.encodedConfig)
@@ -133,16 +167,20 @@ public actor PoolSupervisor {
                 // cancelled here, so a plain `await` would be aborted and leak the
                 // runner — exactly the case this cleans up.
                 if let runnerID, let target = try? pool.github.parsedTarget() {
+                    report(.deregistering, vm.name)
                     await deregister(runnerID: runnerID, target: target, via: github)
                 }
 
+                report(.stopping, vm.name)
                 await releaseOnce(vm)
             } catch {
                 if Task.isCancelled { break }
+                report(.retrying)
                 Log.warn("[\(tag)] acquire failed: \(error) — retrying in 5s")
                 try? await Task.sleep(for: .seconds(5))
             }
         }
+        report(.done)
     }
 
     /// Deregister a runner from GitHub, shielded from the caller's cancellation and

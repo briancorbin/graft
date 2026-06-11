@@ -36,10 +36,24 @@ struct Run: AsyncParsableCommand {
         }
 
         let scope = KeychainScope(rawValue: cfg.secrets?.scope ?? "login") ?? .login
+
+        // Live spinner dashboard only when we own an interactive terminal; daemon /
+        // piped output keeps the plain log stream.
+        let dashboard = (!daemon && isatty(STDOUT_FILENO) != 0) ? LiveDashboard() : nil
+        dashboard?.start()
+        if let dashboard {
+            Log.sink = { line, isWarn in dashboard.log(line, isWarn: isWarn) }
+        }
+        defer { Log.sink = nil; dashboard?.stop() }
+
+        let reporter: RunnerStatusReporter? = dashboard.map { (d: LiveDashboard) -> RunnerStatusReporter in
+            { tag, vm, phase in d.update(slot: tag, vm: vm, phase: phase) }
+        }
         let supervisor = PoolSupervisor(
             config: cfg,
             provider: LocalTartProvider(),
-            secrets: KeychainSecretStore(scope: scope)
+            secrets: KeychainSecretStore(scope: scope),
+            status: reporter
         )
 
         try Daemon.writePidfile()
