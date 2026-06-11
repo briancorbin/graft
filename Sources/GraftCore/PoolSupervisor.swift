@@ -26,6 +26,10 @@ public actor PoolSupervisor {
     private let runner: any RunnerRunner
     private let state: StateManager
     private var runners: [String: RunnerRecord] = [:]
+    /// VMs currently being torn down — so the shutdown watcher and a slot's own
+    /// teardown can't both fire `tart stop`/`delete` on the same VM and wedge tart
+    /// on its per-VM lock inside an un-cancellable `Shell.run`.
+    private var releasing: Set<String> = []
 
     /// `github` is a factory keyed by App ID — different pools can use different
     /// GitHub Apps (personal vs. work), each with its own client.
@@ -117,8 +121,7 @@ public actor PoolSupervisor {
                     Log.warn("[\(tag)] runner \(vm.name) failed: \(error)")
                 }
 
-                untrack(vm.name)
-                try? await provider.release(vm)
+                await releaseOnce(vm)
             } catch {
                 if Task.isCancelled { break }
                 Log.warn("[\(tag)] acquire failed: \(error) — retrying in 5s")
@@ -137,6 +140,17 @@ public actor PoolSupervisor {
     private func untrack(_ name: String) {
         runners[name] = nil
         persist()
+    }
+
+    /// Release a VM exactly once. The `releasing` check-and-insert runs
+    /// synchronously on the actor (no `await` between), so the second caller — a
+    /// slot's own teardown vs. the shutdown watcher — bails before issuing a
+    /// duplicate `tart stop`/`delete` that would collide on tart's per-VM lock.
+    private func releaseOnce(_ vm: RunningVM) async {
+        guard releasing.insert(vm.name).inserted else { return }
+        untrack(vm.name)
+        try? await provider.release(vm)
+        releasing.remove(vm.name)
     }
 
     private func persist() {
@@ -166,9 +180,9 @@ public actor PoolSupervisor {
     /// Stop every tracked VM — the reliable lever for breaking a slot blocked in
     /// `tart exec` during shutdown.
     private func stopTrackedVMs() async {
-        for record in runners.values {
+        for record in Array(runners.values) {
             Log.info("shutdown: stopping \(record.vm.name)")
-            try? await provider.release(record.vm)
+            await releaseOnce(record.vm)
         }
     }
 
@@ -184,9 +198,9 @@ public actor PoolSupervisor {
     }
 
     private func cleanup() async {
-        for record in runners.values {
+        for record in Array(runners.values) {
             Log.info("shutdown: releasing \(record.vm.name)")
-            try? await provider.release(record.vm)
+            await releaseOnce(record.vm)
         }
         runners.removeAll()
         // Final sweep catches anything a slot's own teardown raced past.

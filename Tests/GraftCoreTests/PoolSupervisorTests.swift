@@ -7,8 +7,23 @@ import Testing
 private actor Recorder {
     var acquired: [String] = []
     var released: [String] = []
+    private var inFlight: [String: Int] = [:]
+    /// Peak number of overlapping `release` calls for any single VM. Two concurrent
+    /// releases of the same VM are what wedge `tart` on its per-VM lock during
+    /// shutdown — so this must stay 1.
+    private(set) var maxConcurrentReleasePerName = 0
+
     func acquire(_ name: String) { acquired.append(name) }
-    func release(_ name: String) { released.append(name) }
+
+    func releaseBegin(_ name: String) {
+        let n = (inFlight[name] ?? 0) + 1
+        inFlight[name] = n
+        maxConcurrentReleasePerName = max(maxConcurrentReleasePerName, n)
+    }
+    func releaseEnd(_ name: String) {
+        inFlight[name] = (inFlight[name] ?? 1) - 1
+        released.append(name)
+    }
 }
 
 private struct MockProvider: VMProvider {
@@ -23,7 +38,13 @@ private struct MockProvider: VMProvider {
         return RunningVM(name: name, ip: "10.0.0.2", os: os)
     }
 
-    func release(_ vm: RunningVM) async throws { await recorder.release(vm.name) }
+    func release(_ vm: RunningVM) async throws {
+        await recorder.releaseBegin(vm.name)
+        // Widen the teardown window so a duplicate release would actually overlap
+        // (and be caught) rather than slipping through as two fast sequential calls.
+        try? await Task.sleep(for: .milliseconds(30))
+        await recorder.releaseEnd(vm.name)
+    }
     func exec(on vm: RunningVM, _ command: [String]) async throws -> ShellResult {
         ShellResult(exitCode: 0, stdout: "", stderr: "")
     }
@@ -88,13 +109,18 @@ struct PoolSupervisorTests {
         }
         #expect(await recorder.acquired.count == 5)
 
-        // Graceful shutdown releases every VM (possibly via both the slot and the
-        // shutdown watcher — release is idempotent, so assert coverage, not count).
+        // Graceful shutdown releases every VM. The slot's own teardown and the
+        // shutdown watcher both target it, so assert coverage (every VM released)…
         task.cancel()
         await task.value
         let acquired = await recorder.acquired
         let released = await recorder.released
         #expect(Set(released) == Set(acquired))
+
+        // …and that the two teardown paths never released the same VM concurrently
+        // (that collision is what hangs `tart` on its per-VM lock). Regression guard
+        // for the `releaseOnce` de-dupe.
+        #expect(await recorder.maxConcurrentReleasePerName == 1)
 
         // State is cleaned up.
         let persisted = StateManager(directory: stateDir).load()
