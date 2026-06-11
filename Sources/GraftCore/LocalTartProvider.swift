@@ -13,6 +13,13 @@ public struct LocalTartProvider: VMProvider {
     /// hard limit of 2; Linux is bounded by cores (heuristic, ~half). The supervisor
     /// enforces desired count against this — the provider just reports the ceiling.
     public func capacity(for os: GuestOS) async -> Int {
+        Self.hostCapacity(for: os)
+    }
+
+    /// Synchronous host-capacity ceiling — Apple's hard 2-macOS-VM limit; Linux
+    /// bounded by cores. Exposed so the UI can plan a target count without an async
+    /// provider call.
+    public static func hostCapacity(for os: GuestOS) -> Int {
         switch os {
         case .macOS:
             return 2

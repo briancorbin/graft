@@ -64,19 +64,15 @@ public actor PoolSupervisor {
         await reconcile()
 
         await withTaskGroup(of: Void.self) { group in
-            // Budget capacity per OS across ALL pools — two macOS pools can't each
-            // grab 2 VMs on a 2-VM host.
-            var budget: [GuestOS: Int] = [:]
-            for os in GuestOS.allCases { budget[os] = await provider.capacity(for: os) }
+            // Budget capacity per OS across ALL pools (two macOS pools can't each
+            // grab 2 VMs on a 2-VM host). Shared planner keeps this identical to the
+            // target the menu-bar app shows.
+            var capacityByOS: [GuestOS: Int] = [:]
+            for os in GuestOS.allCases { capacityByOS[os] = await provider.capacity(for: os) }
 
-            for pool in config.pools {
-                let want = pool.count
-                let available = budget[pool.os] ?? 0
-                let slots = max(0, min(want, available))
-                budget[pool.os] = available - slots
-
-                if slots < want {
-                    Log.warn("pool '\(pool.name)': clamped \(want) → \(slots) (host \(pool.os.rawValue) capacity)")
+            for (pool, slots) in config.plannedSlots(capacity: { capacityByOS[$0] ?? 0 }) {
+                if slots < pool.count {
+                    Log.warn("pool '\(pool.name)': clamped \(pool.count) → \(slots) (host \(pool.os.rawValue) capacity)")
                 }
                 Log.info("pool '\(pool.name)': \(slots) runner slot(s)")
                 for slot in 0..<slots {

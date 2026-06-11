@@ -97,7 +97,9 @@ struct MenuContentView: View {
             }
             HStack {
                 if controller.isRunning {
-                    Button("Stop") { controller.stop() }.disabled(busy)
+                    // Enabled during boot (so you can cancel), disabled only while
+                    // already tearing down (no double-stop).
+                    Button("Stop") { controller.stop() }.disabled(controller.isStopping)
                 } else {
                     Button("Start") { controller.start() }
                         .disabled(busy || !controller.graftInstalled)
