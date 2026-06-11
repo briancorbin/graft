@@ -14,12 +14,17 @@ final class GraftController: ObservableObject {
     @Published var profiles: [String] = []
     /// Transient note shown in the menu during an action (e.g. "Booting runners… 1/2").
     @Published var actionNote: String?
-    /// True only while tearing down — used to block Stop spam (Start may still be
-    /// interrupted by Stop, but a teardown can't be double-triggered).
+    /// True only while tearing down — blocks double-Stop (Start may still be
+    /// interrupted by Stop).
     @Published var isStopping = false
 
     private let state = StateManager()
     private var timer: Timer?
+
+    /// Bumped on every user action. A poll loop captures the token at launch and
+    /// bails the moment a newer action supersedes it — so a Stop and a Start can't
+    /// fight over the spinner.
+    private var actionToken = 0
 
     init() {
         refresh()
@@ -28,79 +33,63 @@ final class GraftController: ObservableObject {
         }
     }
 
-    /// Re-read daemon liveness, the runner snapshot, and profiles.
+    /// Re-read daemon liveness, the runner snapshot, and profiles. Also self-heals a
+    /// stuck "Stopping…" if the daemon is actually gone.
     func refresh() {
         isRunning = Daemon.isRunning
         runners = state.load()?.runners ?? []
         activeProfile = Profiles.activeName()
         profiles = Profiles.names()
+        if isStopping && !isRunning {
+            isStopping = false
+            actionNote = nil
+        }
     }
 
     // MARK: Actions
 
     func start() {
         guard let graft = Self.graftPath else { return }
+        actionToken += 1
+        let token = actionToken
         let target = currentTarget()
         actionNote = target > 0 ? "Booting runners… 0/\(target)" : "Starting…"
         let log = NSHomeDirectory() + "/.graft/graft.log"
         runShell("nohup '\(graft)' run --daemon >> '\(log)' 2>&1 &")
-        // Hold the spinner until the planned runners are actually up (VMs boot +
-        // download the runner — a minute or two), showing live progress.
-        waitForFill(target: target, attemptsRemaining: 360)
+        pollFill(token: token, target: target, attemptsRemaining: 360)
     }
 
     func stop() {
         guard let graft = Self.graftPath else { return }
+        actionToken += 1
+        let token = actionToken
+        let targetPID = Daemon.runningPID()
         isStopping = true
         actionNote = "Stopping…"
         runProcess(graft, ["stop"])
-        // Hold the spinner (and disabled controls) until the daemon has fully torn
-        // down — it removes its pidfile only after every VM is released.
-        waitForStop(attemptsRemaining: 240) { [weak self] in
+        pollStop(token: token, pid: targetPID, attemptsRemaining: 240) { [weak self] in
             self?.isStopping = false
             self?.actionNote = nil
             self?.refresh()
         }
     }
 
-    /// Runners that will actually start for the active profile, after capacity
-    /// clamping — the same number the supervisor will launch.
-    private func currentTarget() -> Int {
-        guard let name = activeProfile, let config = try? Profiles.load(name) else { return 0 }
-        return config.plannedRunnerCount { LocalTartProvider.hostCapacity(for: $0) }
-    }
-
-    /// Poll until the daemon is up and the runner count reaches `target`, updating
-    /// the progress note each tick. Clears on fill or timeout.
-    private func waitForFill(target: Int, attemptsRemaining: Int) {
-        refresh()
-        if target > 0 {
-            actionNote = "Booting runners… \(runners.count)/\(target)"
-        }
-        let filled = isRunning && (target == 0 || runners.count >= target)
-        if filled || attemptsRemaining <= 0 {
-            actionNote = nil
-            refresh()
-            return
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.waitForFill(target: target, attemptsRemaining: attemptsRemaining - 1)
-        }
-    }
-
     /// Switch the active profile. If the daemon is running, restart it so the new
-    /// profile's pools actually take effect (the supervisor reads the active profile
-    /// only at startup).
+    /// profile's pools take effect (the supervisor reads the active profile only at
+    /// startup).
     func useProfile(_ name: String) {
         guard let graft = Self.graftPath, name != activeProfile else { return }
         runProcessSync(graft, ["profile", "use", name])
         activeProfile = name
 
         if isRunning {
+            actionToken += 1
+            let token = actionToken
+            let targetPID = Daemon.runningPID()
             isStopping = true
             actionNote = "Switching to \(name)…"
             runProcess(graft, ["stop"])
-            waitForStop(attemptsRemaining: 120) { [weak self] in
+            pollStop(token: token, pid: targetPID, attemptsRemaining: 240) { [weak self] in
                 self?.isStopping = false
                 self?.start()
             }
@@ -111,17 +100,45 @@ final class GraftController: ObservableObject {
 
     var graftInstalled: Bool { Self.graftPath != nil }
 
-    /// Poll until the daemon's pidfile clears (graceful teardown can take a few
-    /// seconds per VM), then run `then`. Refreshes the UI while waiting.
-    private func waitForStop(attemptsRemaining: Int, then: @escaping () -> Void) {
+    // MARK: Poll loops (token-guarded)
+
+    /// Poll until the daemon is up and the runner count reaches `target`, updating
+    /// the progress note. Clears on fill, timeout, or supersession.
+    private func pollFill(token: Int, target: Int, attemptsRemaining: Int) {
+        guard token == actionToken else { return }
         refresh()
-        if attemptsRemaining <= 0 || !Daemon.isRunning {
-            then()
+        if target > 0 { actionNote = "Booting runners… \(runners.count)/\(target)" }
+        let filled = isRunning && (target == 0 || runners.count >= target)
+        if filled || attemptsRemaining <= 0 {
+            actionNote = nil
+            refresh()
             return
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.waitForStop(attemptsRemaining: attemptsRemaining - 1, then: then)
+            self?.pollFill(token: token, target: target, attemptsRemaining: attemptsRemaining - 1)
         }
+    }
+
+    /// Poll until the specific daemon `pid` we stopped is gone (not "any daemon" —
+    /// a freshly started one mustn't keep this spinning), then run `done`.
+    private func pollStop(token: Int, pid: Int32?, attemptsRemaining: Int, done: @escaping () -> Void) {
+        guard token == actionToken else { return }
+        refresh()
+        let gone = pid == nil || !Self.pidAlive(pid!)
+        if gone || attemptsRemaining <= 0 {
+            done()
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.pollStop(token: token, pid: pid, attemptsRemaining: attemptsRemaining - 1, done: done)
+        }
+    }
+
+    /// Runners that will actually start for the active profile, after capacity
+    /// clamping — the same number the supervisor will launch.
+    private func currentTarget() -> Int {
+        guard let name = activeProfile, let config = try? Profiles.load(name) else { return 0 }
+        return config.plannedRunnerCount { LocalTartProvider.hostCapacity(for: $0) }
     }
 
     // MARK: Process plumbing
@@ -137,12 +154,10 @@ final class GraftController: ObservableObject {
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
     }()
 
+    private static func pidAlive(_ pid: Int32) -> Bool { kill(pid, 0) == 0 }
+
     private func scheduleRefresh() {
-        // The daemon needs a beat to write/remove its pidfile.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-            self?.refresh()
-            self?.actionNote = nil
-        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in self?.refresh() }
     }
 
     private func runProcess(_ launchPath: String, _ arguments: [String]) {
