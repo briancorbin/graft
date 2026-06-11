@@ -26,14 +26,14 @@ xcodegen generate
 echo "==> Building Release (Developer ID, hardened runtime, secure timestamp)"
 DERIVED="$ROOT/.build-app"
 rm -rf "$DERIVED"
-xcodebuild -project GraftBar.xcodeproj -scheme GraftBar -configuration Release \
+xcodebuild -project Graft.xcodeproj -scheme Graft -configuration Release \
   -derivedDataPath "$DERIVED" \
   CODE_SIGN_STYLE=Manual \
   CODE_SIGN_IDENTITY="$IDENTITY" \
   OTHER_CODE_SIGN_FLAGS="--timestamp" \
   build
 
-APP="$DERIVED/Build/Products/Release/GraftBar.app"
+APP="$DERIVED/Build/Products/Release/Graft.app"
 [ -d "$APP" ] || { echo "build did not produce $APP" >&2; exit 1; }
 
 echo "==> Verifying signature + hardened runtime"
@@ -42,7 +42,7 @@ codesign -d --verbose=2 "$APP" 2>&1 | grep -i "runtime" || echo "WARNING: harden
 
 DIST="$ROOT/dist"
 mkdir -p "$DIST"
-ZIP="$DIST/GraftBar-$VERSION.zip"
+ZIP="$DIST/Graft-$VERSION.zip"
 
 echo "==> Zipping for notarization"
 rm -f "$ZIP"

@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="Assets/graft-mark-light.svg">
-    <img src="Assets/graft-mark-dark.svg" alt="Graft" width="84" height="84">
-  </picture>
+  <img src="Assets/app-icon-light.svg" alt="Graft" width="96" height="96">
 </p>
 
 <h1 align="center">Graft</h1>

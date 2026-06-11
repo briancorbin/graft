@@ -1,4 +1,4 @@
-name: GraftBar
+name: Graft
 options:
   bundleIdPrefix: dev.graft
   deploymentTarget:
@@ -6,28 +6,26 @@ options:
   createIntermediateGroups: true
 
 packages:
-  Graft:
+  GraftPackage:
     path: .
 
 targets:
-  GraftBar:
+  Graft:
     type: application
     platform: macOS
     sources:
       - GraftBar
     dependencies:
-      - package: Graft
+      - package: GraftPackage
         product: GraftCore
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.graft.GraftBar
-        PRODUCT_NAME: GraftBar
+        PRODUCT_BUNDLE_IDENTIFIER: dev.graft.Graft
+        PRODUCT_NAME: Graft
         DEVELOPMENT_TEAM: "27N85AU6XK"
         CODE_SIGN_STYLE: Manual
-        # Don't inject the get-task-allow debug entitlement — notarization rejects it,
-        # and a menu-bar app needs no entitlements.
         CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
-        MARKETING_VERSION: "0.1.2"
+        MARKETING_VERSION: "0.1.3"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "5.0"
         MACOSX_DEPLOYMENT_TARGET: "14.0"

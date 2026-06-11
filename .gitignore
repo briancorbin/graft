@@ -9,6 +9,7 @@ Package.resolved
 DerivedData/
 
 # XcodeGen generates the project from project.yml — don't commit it
+Graft.xcodeproj/
 GraftBar.xcodeproj/
 
 # macOS
