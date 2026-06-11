@@ -53,7 +53,7 @@ public struct ImageRecipe: Codable, Sendable {
     public static func template() -> String {
         """
         {
-          "name": "galaxy-detox",
+          "name": "rn-detox",
           "from": "ghcr.io/cirruslabs/macos-sequoia-xcode:latest",
           "run": [
             "brew install applesimutils",

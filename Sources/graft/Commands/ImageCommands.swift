@@ -81,7 +81,7 @@ extension Image {
         @Argument(help: "Local image name.")
         var name: String
 
-        @Argument(help: "Registry ref, e.g. ghcr.io/me/galaxy-detox:latest")
+        @Argument(help: "Registry ref, e.g. ghcr.io/me/rn-detox:latest")
         var ref: String
 
         func run() async throws {

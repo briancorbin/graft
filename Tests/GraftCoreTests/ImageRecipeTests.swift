@@ -6,9 +6,9 @@ import Testing
 struct ImageRecipeTests {
     @Test("decodes a minimal recipe with defaults")
     func minimal() throws {
-        let json = #"{"name":"galaxy-detox","from":"base:latest","run":["a","b"]}"#
+        let json = #"{"name":"rn-detox","from":"base:latest","run":["a","b"]}"#
         let r = try JSONDecoder().decode(ImageRecipe.self, from: Data(json.utf8))
-        #expect(r.name == "galaxy-detox")
+        #expect(r.name == "rn-detox")
         #expect(r.from == "base:latest")
         #expect(r.run == ["a", "b"])
         #expect(r.mounts == nil)

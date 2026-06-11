@@ -168,10 +168,13 @@ runner. See **[docs/images-and-caching.md](docs/images-and-caching.md)** for rec
 the CoW caching strategy, and host-mount safety (read-only for shared caches).
 
 ```sh
-graft image build -f image.json                      # build galaxy-detox
-graft dev --image galaxy-detox                        # shell into it, $PWD mounted
-graft dev --image galaxy-detox -- npx detox test e2e/ # or run a command
+graft image build -f examples/images/rn-detox.json   # build a golden image
+graft dev --image rn-detox                           # shell into it, $PWD mounted
+graft dev --image rn-detox -- npx detox test e2e/    # or run a command
 ```
+
+Ready-to-adapt recipes (React Native/Detox, iOS/Fastlane, Node, script-based) live in
+**[examples/images/](examples/images/)**.
 
 ## Architecture
 

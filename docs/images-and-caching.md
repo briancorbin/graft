@@ -10,7 +10,7 @@ A recipe is JSON (`graft image template` prints a starter):
 
 ```json
 {
-  "name": "galaxy-detox",
+  "name": "rn-detox",
   "from": "ghcr.io/cirruslabs/macos-sequoia-xcode:latest",
   "run": [
     "brew install applesimutils",
@@ -22,7 +22,7 @@ A recipe is JSON (`graft image template` prints a starter):
 ```sh
 graft image build -f image.json     # clone → boot → run steps in-guest → snapshot
 graft image list                    # local images + VMs
-graft image push galaxy-detox ghcr.io/you/galaxy-detox:latest   # share with the team
+graft image push rn-detox ghcr.io/you/rn-detox:latest   # share with the team
 ```
 
 `from` is any Tart ref (start from a `cirruslabs/*-xcode` base — Xcode + simulators are
@@ -30,8 +30,8 @@ already baked). `run` steps execute in the guest; whatever they leave behind is 
 into the image. `mounts` (optional) expose host dirs during the build, e.g. to warm a
 project's caches.
 
-Reference the image from a pool (`"image": "galaxy-detox"`) or `graft dev --image
-galaxy-detox`.
+Reference the image from a pool (`"image": "rn-detox"`) or `graft dev --image
+rn-detox`.
 
 ## Why baking caches is (almost) free: APFS copy-on-write
 
@@ -46,7 +46,7 @@ block, on writes only**:
 
 ```
 cirruslabs xcode base
-   └─ build → galaxy-detox        (+ Pods / node_modules / DerivedData blocks)
+   └─ build → rn-detox        (+ Pods / node_modules / DerivedData blocks)
         ├─ clone → runner-abc      (writable; diverges only where it writes)
         └─ clone → runner-def      (its own divergence)
 ```
@@ -71,7 +71,7 @@ When a cache moves faster than your rebuild cadence, mount it from the host inst
 baking it. Pools take a `mounts` list; `graft pool add` takes `--mount`:
 
 ```sh
-graft pool add --name mac --image galaxy-detox --app-id 123 --target repo:org/app \
+graft pool add --name mac --image rn-detox --app-id 123 --target repo:org/app \
   --mount pods:/opt/graft-cache/pods:ro \
   --mount npm:/opt/graft-cache/npm:ro
 ```

@@ -1,0 +1,9 @@
+{
+  "name": "node-ci",
+  "from": "ghcr.io/cirruslabs/macos-sequoia-base:latest",
+  "run": [
+    "brew install fnm",
+    "eval \"$(fnm env)\" && fnm install 20 && fnm default 20 && corepack enable",
+    "npm install -g pnpm"
+  ]
+}
