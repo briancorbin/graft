@@ -22,11 +22,17 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.graft.GraftBar
         PRODUCT_NAME: GraftBar
-        MARKETING_VERSION: "0.1.0"
+        DEVELOPMENT_TEAM: "27N85AU6XK"
+        CODE_SIGN_STYLE: Manual
+        # Don't inject the get-task-allow debug entitlement — notarization rejects it,
+        # and a menu-bar app needs no entitlements.
+        CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+        MARKETING_VERSION: "0.1.2"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "5.0"
         MACOSX_DEPLOYMENT_TARGET: "14.0"
         GENERATE_INFOPLIST_FILE: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_LSUIElement: YES
         INFOPLIST_KEY_CFBundleDisplayName: Graft
         INFOPLIST_KEY_NSHumanReadableCopyright: "© 2026 Brian Corbin"
