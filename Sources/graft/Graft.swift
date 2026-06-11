@@ -11,7 +11,7 @@ struct Graft: AsyncParsableCommand {
         subcommands: [
             Init.self, Run.self, Status.self, Stop.self, Doctor.self,
             Profile.self, Pool.self, VM.self, ConfigCommand.self, Secrets.self,
-            Runners.self, Image.self,
+            Runners.self, Image.self, Dev.self,
         ]
     )
 }

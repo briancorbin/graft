@@ -169,6 +169,27 @@ public enum Shell {
         }
     }
 
+    /// Run a command with this process's terminal fully inherited (stdin + stdout +
+    /// stderr), for an interactive session like a shell. Blocks until it exits and
+    /// returns the exit code. Unlike `runStreaming`, stdin is inherited too, so the
+    /// child gets the controlling TTY.
+    public static func runInteractive(
+        _ executable: String,
+        _ arguments: [String] = [],
+        environment: [String: String]? = nil
+    ) throws -> Int32 {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = [executable] + arguments
+        process.environment = environment ?? ProcessInfo.processInfo.environment
+        process.standardInput = FileHandle.standardInput
+        process.standardOutput = FileHandle.standardOutput
+        process.standardError = FileHandle.standardError
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus
+    }
+
     /// Launch a command fully detached (`nohup … &`) so it survives this process
     /// exiting. Used for `tart run`, where the VM stays alive only as long as the
     /// run process does — and we want `graft vm create` to return while it keeps

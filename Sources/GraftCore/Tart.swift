@@ -58,6 +58,14 @@ public enum Tart {
         try await Shell.runChecked(executable, ["pull", ref])
     }
 
+    /// Run a command in the guest with the host terminal inherited, returning its exit
+    /// code. `interactive` adds `tart exec -i` to forward stdin — needed for a shell,
+    /// but it blocks on a non-TTY stdin, so omit it for one-shot commands.
+    public static func execInteractive(name: String, command: [String], interactive: Bool = true) throws -> Int32 {
+        let base = interactive ? ["exec", "-i", name] : ["exec", name]
+        return try Shell.runInteractive(executable, base + command)
+    }
+
     /// Current IP, or nil if the VM has no lease yet (DHCP can take 10–60s). Bounded —
     /// a hung `tart ip` would otherwise wedge the acquire loop forever.
     public static func ip(name: String) async throws -> String? {
