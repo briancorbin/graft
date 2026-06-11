@@ -12,6 +12,8 @@ final class GraftController: ObservableObject {
     @Published var runners: [RunnerRecord] = []
     @Published var activeProfile: String?
     @Published var profiles: [String] = []
+    /// Transient note shown in the menu during an action (e.g. "Switching profile…").
+    @Published var actionNote: String?
 
     private let state = StateManager()
     private var timer: Timer?
@@ -35,6 +37,7 @@ final class GraftController: ObservableObject {
 
     func start() {
         guard let graft = Self.graftPath else { return }
+        actionNote = "Starting…"
         let log = NSHomeDirectory() + "/.graft/graft.log"
         runShell("nohup '\(graft)' run --daemon >> '\(log)' 2>&1 &")
         scheduleRefresh()
@@ -42,17 +45,44 @@ final class GraftController: ObservableObject {
 
     func stop() {
         guard let graft = Self.graftPath else { return }
+        actionNote = "Stopping…"
         runProcess(graft, ["stop"])
         scheduleRefresh()
     }
 
+    /// Switch the active profile. If the daemon is running, restart it so the new
+    /// profile's pools actually take effect (the supervisor reads the active profile
+    /// only at startup).
     func useProfile(_ name: String) {
-        guard let graft = Self.graftPath else { return }
-        runProcess(graft, ["profile", "use", name])
-        refresh()
+        guard let graft = Self.graftPath, name != activeProfile else { return }
+        runProcessSync(graft, ["profile", "use", name])
+        activeProfile = name
+
+        if isRunning {
+            actionNote = "Switching to \(name)…"
+            runProcess(graft, ["stop"])
+            waitForStop(attemptsRemaining: 120) { [weak self] in
+                self?.start()
+            }
+        } else {
+            scheduleRefresh()
+        }
     }
 
     var graftInstalled: Bool { Self.graftPath != nil }
+
+    /// Poll until the daemon's pidfile clears (graceful teardown can take a few
+    /// seconds per VM), then run `then`. Refreshes the UI while waiting.
+    private func waitForStop(attemptsRemaining: Int, then: @escaping () -> Void) {
+        refresh()
+        if attemptsRemaining <= 0 || !Daemon.isRunning {
+            then()
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.waitForStop(attemptsRemaining: attemptsRemaining - 1, then: then)
+        }
+    }
 
     // MARK: Process plumbing
 
@@ -69,7 +99,10 @@ final class GraftController: ObservableObject {
 
     private func scheduleRefresh() {
         // The daemon needs a beat to write/remove its pidfile.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in self?.refresh() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            self?.refresh()
+            self?.actionNote = nil
+        }
     }
 
     private func runProcess(_ launchPath: String, _ arguments: [String]) {
@@ -78,6 +111,17 @@ final class GraftController: ObservableObject {
         process.arguments = arguments
         process.environment = Self.augmentedEnvironment
         try? process.run()
+    }
+
+    /// Run and wait — for quick commands like `profile use` whose effect we read
+    /// immediately afterward.
+    private func runProcessSync(_ launchPath: String, _ arguments: [String]) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: launchPath)
+        process.arguments = arguments
+        process.environment = Self.augmentedEnvironment
+        try? process.run()
+        process.waitUntilExit()
     }
 
     private func runShell(_ command: String) {

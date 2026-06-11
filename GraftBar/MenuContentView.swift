@@ -1,27 +1,28 @@
 import SwiftUI
 import GraftCore
 
-/// The menu-bar dropdown content. Status at a glance + the handful of actions you
-/// actually reach for: start/stop and switch profile.
+/// The menu-bar dropdown content. Status at a glance + the actions you actually
+/// reach for: switch profile, start/stop.
 struct MenuContentView: View {
     @ObservedObject var controller: GraftController
+
+    private var busy: Bool { controller.actionNote != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
+            profileSwitcher
 
-            if let profile = controller.activeProfile {
-                Text("Profile: \(profile)")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+            if let note = controller.actionNote {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text(note).font(.subheadline).foregroundStyle(.secondary)
+                }
             }
 
             Divider()
-
             runnerList
-
             Divider()
-
             actions
         }
         .padding(12)
@@ -45,6 +46,32 @@ struct MenuContentView: View {
     }
 
     @ViewBuilder
+    private var profileSwitcher: some View {
+        if controller.profiles.isEmpty {
+            Text("No profiles — run graft init")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        } else {
+            Menu {
+                ForEach(controller.profiles, id: \.self) { name in
+                    Button {
+                        controller.useProfile(name)
+                    } label: {
+                        if name == controller.activeProfile {
+                            Label(name, systemImage: "checkmark")
+                        } else {
+                            Text(name)
+                        }
+                    }
+                }
+            } label: {
+                Label("Profile: \(controller.activeProfile ?? "—")", systemImage: "square.stack.3d.up")
+            }
+            .disabled(busy)
+        }
+    }
+
+    @ViewBuilder
     private var runnerList: some View {
         if controller.runners.isEmpty {
             Text("No active runners")
@@ -61,42 +88,24 @@ struct MenuContentView: View {
         }
     }
 
-    @ViewBuilder
     private var actions: some View {
-        if !controller.graftInstalled {
-            Text("graft CLI not found")
-                .font(.subheadline)
-                .foregroundStyle(.red)
-        }
-
-        HStack {
-            if controller.isRunning {
-                Button("Stop") { controller.stop() }
-            } else {
-                Button("Start") { controller.start() }
-                    .disabled(!controller.graftInstalled)
+        VStack(alignment: .leading, spacing: 10) {
+            if !controller.graftInstalled {
+                Text("graft CLI not found")
+                    .font(.subheadline)
+                    .foregroundStyle(.red)
             }
-            Spacer()
-        }
-
-        if controller.profiles.count > 1 {
-            Menu("Switch profile") {
-                ForEach(controller.profiles, id: \.self) { name in
-                    Button {
-                        controller.useProfile(name)
-                    } label: {
-                        if name == controller.activeProfile {
-                            Label(name, systemImage: "checkmark")
-                        } else {
-                            Text(name)
-                        }
-                    }
+            HStack {
+                if controller.isRunning {
+                    Button("Stop") { controller.stop() }.disabled(busy)
+                } else {
+                    Button("Start") { controller.start() }
+                        .disabled(busy || !controller.graftInstalled)
                 }
+                Spacer()
+                Button("Quit") { NSApplication.shared.terminate(nil) }
+                    .buttonStyle(.borderless)
             }
         }
-
-        Divider()
-
-        Button("Quit Graft Bar") { NSApplication.shared.terminate(nil) }
     }
 }
