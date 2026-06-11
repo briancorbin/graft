@@ -122,7 +122,7 @@ Headless via launchd: see [`Resources/com.graft.runner.plist`](Resources/com.gra
 ```
 graft init                              Interactive setup: profile + pools + key import
 graft doctor                            Verify GitHub App auth end-to-end (no VM boot)
-graft run [--profile NAME] [--daemon]   Start the supervisor
+graft run [--profile NAME] [--daemon] [--verbose]   Start the supervisor (live spinner; -v for full logs)
 graft status                            Show supervisor + runner state
 graft stop                              Gracefully stop a running supervisor
 

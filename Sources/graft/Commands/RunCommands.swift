@@ -19,6 +19,9 @@ struct Run: AsyncParsableCommand {
     @Flag(help: "Daemon mode for launchd. launchd does the supervising — this just notes intent.")
     var daemon = false
 
+    @Flag(name: .shortAndLong, help: "Echo every step (runner output + events) above the live status, instead of just the spinner.")
+    var verbose = false
+
     @Option(name: .long, help: "Use an Orchard controller instead of local Tart (not yet implemented).")
     var orchardURL: String?
 
@@ -42,7 +45,13 @@ struct Run: AsyncParsableCommand {
         let dashboard = (!daemon && isatty(STDOUT_FILENO) != 0) ? LiveDashboard() : nil
         dashboard?.start()
         if let dashboard {
-            Log.sink = { line, isWarn in dashboard.log(line, isWarn: isWarn) }
+            // Quiet by default: only warnings/errors print above the spinner. With
+            // --verbose, echo every event + runner-output line. Phase parsing runs
+            // regardless, so the spinner is fully driven either way.
+            let verbose = self.verbose
+            Log.sink = { line, isWarn in
+                if verbose || isWarn { dashboard.log(line, isWarn: isWarn) }
+            }
         }
         defer { Log.sink = nil; dashboard?.stop() }
 
