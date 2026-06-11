@@ -1,9 +1,0 @@
-{
-  "name": "ios-fastlane",
-  "from": "ghcr.io/cirruslabs/macos-sequoia-xcode:latest",
-  "run": [
-    "rbenv install -s 3.3.5 && rbenv global 3.3.5",
-    "gem install bundler fastlane --no-document",
-    "sudo xcodebuild -runFirstLaunch"
-  ]
-}

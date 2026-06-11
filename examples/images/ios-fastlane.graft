@@ -1,0 +1,7 @@
+# iOS build/release with Fastlane.
+name: ios-fastlane
+from: ghcr.io/cirruslabs/macos-sequoia-xcode:latest
+
+ruby: "3.3.5"
+gems: [fastlane]
+xcode-first-launch: true

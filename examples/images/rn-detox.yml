@@ -1,8 +1,0 @@
-name: rn-detox
-from: ghcr.io/cirruslabs/macos-sequoia-xcode:latest
-run: |
-  set -euo pipefail
-  eval "$(fnm env)" && fnm install 20 && fnm default 20 && corepack enable
-  npm install -g detox-cli
-  brew list applesimutils >/dev/null 2>&1 || { brew tap wix/brew && brew install applesimutils; }
-  sudo xcodebuild -runFirstLaunch

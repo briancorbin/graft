@@ -25,7 +25,7 @@ public struct ImageBuilder: Sendable {
             let vm = RunningVM(name: temp, ip: "", os: recipe.guestOS)
             try await provider.waitForGuest(vm, timeout: .seconds(120))
 
-            if let provisioning = Self.script(scriptBody: scriptBody, run: recipe.run) {
+            if let provisioning = recipe.provisioning(scriptBody: scriptBody) {
                 let exit = try await provider.execStreaming(on: vm, script: provisioning, onLine: onLine)
                 guard exit == 0 else { throw GraftError("image build step failed (exit \(exit))") }
             }
@@ -46,15 +46,4 @@ public struct ImageBuilder: Sendable {
         }
     }
 
-    /// Combine the optional script body + inline run steps into one guest script, or
-    /// nil if there's nothing to run. `-e`/`pipefail` fail fast; `-u` is omitted (a
-    /// supplied script can re-enable it). The script runs first, then the run steps.
-    private static func script(scriptBody: String?, run: [String]) -> String? {
-        var parts = ["set -eo pipefail"]
-        if let scriptBody, !scriptBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            parts.append(scriptBody)
-        }
-        parts.append(contentsOf: run)
-        return parts.count > 1 ? parts.joined(separator: "\n") : nil
-    }
 }

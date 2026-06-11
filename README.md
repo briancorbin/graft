@@ -138,7 +138,8 @@ graft pool add --name N --image I --app-id A --target T [--os] [--count] [--labe
 graft pool rm <name> [--profile NAME]
 graft pool list [--profile NAME]
 
-graft image build -f <recipe.yml|json>  Build a golden image (toolchain + warm caches)
+graft image build -f <recipe.graft>     Build a golden image (declarative toolchain)
+graft image render -f <recipe.graft>    Preview the compiled provisioning script
 graft image list / rm / push / pull / template     Manage images
 graft dev [--image N] [--ephemeral] [-- CMD]       Local dev VM with your repo mounted
 
@@ -167,10 +168,16 @@ environments. Tart clones are APFS copy-on-write, so baked caches cost nothing p
 runner. See **[docs/images-and-caching.md](docs/images-and-caching.md)** for recipes,
 the CoW caching strategy, and host-mount safety (read-only for shared caches).
 
+A recipe is a declarative **`.graft`** file (YAML with toolchain fields) — `node: "20"`,
+`ruby: "3.3.5"`, `brew: [...]`, `xcode-first-launch: true`, etc. expand into the right
+provisioning steps (incl. the stable `/usr/local/bin` node symlink Xcode needs). Drop to
+a `run:` block for anything custom.
+
 ```sh
-graft image build -f examples/images/rn-detox.yml    # build a golden image (YAML or JSON)
-graft dev --image rn-detox                           # shell into it, $PWD mounted
-graft dev --image rn-detox -- npx detox test e2e/    # or run a command
+graft image render -f examples/images/rn-detox.graft  # preview the compiled script
+graft image build  -f examples/images/rn-detox.graft  # build the golden image
+graft dev --image rn-detox                            # shell into it, $PWD mounted
+graft dev --image rn-detox -- npx detox test e2e/     # or run a command
 ```
 
 Ready-to-adapt recipes (React Native/Detox, iOS/Fastlane, Node, script-based) live in

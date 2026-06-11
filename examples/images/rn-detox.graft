@@ -1,0 +1,12 @@
+# React Native + Detox iOS e2e. graft expands these into the right provisioning steps.
+name: rn-detox
+from: ghcr.io/cirruslabs/macos-sequoia-xcode:latest
+
+node: "20"
+npm: [detox-cli]
+brew: [applesimutils]
+xcode-first-launch: true
+
+# Anything custom drops to a run: | block, e.g.:
+# run: |
+#   echo "extra setup"

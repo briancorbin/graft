@@ -8,15 +8,27 @@ struct Image: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "image",
         abstract: "Build and manage Tart images.",
-        subcommands: [Build.self, List.self, Remove.self, Push.self, Pull.self, Template.self]
+        subcommands: [Build.self, Render.self, List.self, Remove.self, Push.self, Pull.self, Template.self]
     )
+}
+
+/// Resolve a recipe's `script:` file relative to the recipe path, returning its body.
+func recipeScriptBody(_ recipe: ImageRecipe, recipeFile: String) throws -> String? {
+    guard let scriptRef = recipe.script else { return nil }
+    let recipeDir = ((recipeFile as NSString).expandingTildeInPath as NSString).deletingLastPathComponent
+    let raw = scriptRef.hasPrefix("/") ? scriptRef : (recipeDir as NSString).appendingPathComponent(scriptRef)
+    let path = (raw as NSString).expandingTildeInPath
+    guard let body = try? String(contentsOfFile: path, encoding: .utf8) else {
+        throw GraftError("can't read recipe script at \(path)")
+    }
+    return body
 }
 
 extension Image {
     struct Build: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(abstract: "Build an image from a JSON recipe.")
+        static let configuration = CommandConfiguration(abstract: "Build an image from a .graft / YAML / JSON recipe.")
 
-        @Option(name: .shortAndLong, help: "Recipe file (JSON). See `graft image template`.")
+        @Option(name: .shortAndLong, help: "Recipe file (.graft / .yml / .json). See `graft image template`.")
         var file: String
 
         @Option(name: .long, help: "Override the image name from the recipe.")
@@ -25,26 +37,34 @@ extension Image {
         func run() async throws {
             var recipe = try ImageRecipe.load(from: file)
             if let name {
-                recipe = ImageRecipe(name: name, from: recipe.from, run: recipe.run, script: recipe.script, mounts: recipe.mounts, os: recipe.os)
+                recipe = ImageRecipe(
+                    name: name, from: recipe.from,
+                    node: recipe.node, ruby: recipe.ruby, brew: recipe.brew, gems: recipe.gems,
+                    npm: recipe.npm, xcodeFirstLaunch: recipe.xcodeFirstLaunch, warmSimulators: recipe.warmSimulators,
+                    run: recipe.run, script: recipe.script, mounts: recipe.mounts, os: recipe.os
+                )
             }
 
-            // Read the recipe's `script:` file, resolved relative to the recipe's dir.
-            var scriptBody: String?
-            if let scriptRef = recipe.script {
-                let recipeDir = ((file as NSString).expandingTildeInPath as NSString).deletingLastPathComponent
-                let raw = scriptRef.hasPrefix("/") ? scriptRef : (recipeDir as NSString).appendingPathComponent(scriptRef)
-                let path = (raw as NSString).expandingTildeInPath
-                guard let body = try? String(contentsOfFile: path, encoding: .utf8) else {
-                    throw GraftError("can't read recipe script at \(path)")
-                }
-                scriptBody = body
-            }
-
+            let scriptBody = try recipeScriptBody(recipe, recipeFile: file)
             printErr("building image '\(recipe.name)' from \(recipe.from)…\n")
             try await ImageBuilder().build(recipe, scriptBody: scriptBody) { line in
                 FileHandle.standardError.write(Data((line + "\n").utf8))
             }
             printErr("\n✓ built '\(recipe.name)' — reference it in a pool's `image`, or `graft dev --image \(recipe.name)`")
+        }
+    }
+
+    struct Render: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Print the provisioning script a recipe compiles to (no build).")
+
+        @Option(name: .shortAndLong, help: "Recipe file (.graft / .yml / .json).")
+        var file: String
+
+        func run() throws {
+            let recipe = try ImageRecipe.load(from: file)
+            let scriptBody = try recipeScriptBody(recipe, recipeFile: file)
+            print("# image '\(recipe.name)' from \(recipe.from)")
+            print(recipe.provisioning(scriptBody: scriptBody) ?? "# (nothing to provision)")
         }
     }
 

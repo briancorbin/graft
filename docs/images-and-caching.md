@@ -6,30 +6,39 @@ your runners means "works on my machine" stops being a thing.
 
 ## Build an image
 
-A recipe is YAML or JSON (`graft image template` prints a starter). YAML is nicest
-because `run:` can be a `|` block holding a whole inline script:
+A recipe is a **`.graft`** file (YAML with declarative toolchain fields), or plain
+`.yml`/`.json`. The declarative fields compile into the right provisioning commands —
+so a whole toolchain is a few lines:
 
 ```yaml
 name: rn-detox
 from: ghcr.io/cirruslabs/macos-sequoia-xcode:latest
-run: |
-  set -euo pipefail
-  eval "$(fnm env)" && fnm install 20 && fnm default 20 && corepack enable
-  npm install -g detox-cli
-  sudo xcodebuild -runFirstLaunch
+
+node: "20.19.4"          # fnm install + default + corepack + stable /usr/local/bin symlink
+ruby: "3.3.5"            # rbenv install + bundler
+npm: [detox-cli]
+brew: [applesimutils]
+xcode-first-launch: true
+warm-simulators: ["iPhone 17 Pro"]
+
+# Escape hatch — raw bash for anything custom (runs last):
+# run: |
+#   echo custom step
 ```
 
 ```sh
-graft image build -f image.yml      # clone → boot → run the script in-guest → snapshot
-graft image list                    # local images + VMs
+graft image render -f image.graft   # preview the compiled provisioning script
+graft image build  -f image.graft   # clone → boot → provision in-guest → snapshot
 graft image push rn-detox ghcr.io/you/rn-detox:latest   # share with the team
 ```
 
 `from` is any Tart ref (start from a `cirruslabs/*-xcode` base — Xcode + simulators are
-already baked). `run` is a `|` block script or a list of steps; either runs in the
-guest, and whatever it leaves behind is baked into the image. `script:` points at an
-existing shell file instead. `mounts` (optional) expose host dirs during the build,
-e.g. to warm a project's caches.
+already baked). Declarative fields (`node`, `ruby`, `brew`, `gems`, `npm`,
+`xcode-first-launch`, `warm-simulators`) expand in order; `run:` (a `|` block or list)
+and `script:` (a file) are escape hatches that run after. Whatever the steps leave on
+disk is baked into the image. `mounts` (optional) expose host dirs during the build,
+e.g. to warm a project's caches. See [examples/images/](../examples/images/) for the
+full field reference.
 
 Reference the image from a pool (`"image": "rn-detox"`) or `graft dev --image
 rn-detox`.

@@ -47,6 +47,58 @@ struct ImageRecipeTests {
         #expect(r.run[0].contains("echo step2"))
     }
 
+    @Test("compiles declarative toolchain fields into provisioning steps")
+    func compile() throws {
+        let r = ImageRecipe(
+            name: "x", from: "b",
+            node: "20.19.4", ruby: "3.4.3", brew: ["watchman"], npm: ["detox-cli"],
+            xcodeFirstLaunch: true, warmSimulators: ["iPhone 17 Pro"]
+        )
+        let p = try #require(r.provisioning(scriptBody: nil))
+        #expect(p.contains("set -eo pipefail"))
+        #expect(p.contains("fnm install 20.19.4"))
+        #expect(p.contains("/usr/local/bin"))                 // the node-symlink best practice
+        #expect(p.contains("rbenv install -s 3.4.3"))
+        #expect(p.contains("gem install bundler"))
+        #expect(p.contains("brew install watchman"))
+        #expect(p.contains("npm install -g detox-cli"))
+        #expect(p.contains("xcodebuild -runFirstLaunch"))
+        #expect(p.contains("simctl boot \"iPhone 17 Pro\""))
+        // node before ruby before xcode (toolchain ordering)
+        #expect(p.range(of: "fnm install")!.lowerBound < p.range(of: "rbenv install")!.lowerBound)
+    }
+
+    @Test("compiled steps come before script + run, and run appends after")
+    func order() throws {
+        let r = ImageRecipe(name: "x", from: "b", node: "20", run: ["echo custom"])
+        let p = try #require(r.provisioning(scriptBody: "echo from-script"))
+        #expect(p.range(of: "fnm install")!.lowerBound < p.range(of: "echo from-script")!.lowerBound)
+        #expect(p.range(of: "echo from-script")!.lowerBound < p.range(of: "echo custom")!.lowerBound)
+    }
+
+    @Test("loads a .graft file; tolerates a bare-int version")
+    func loadGraft() throws {
+        let graft = """
+        name: g1
+        from: base:latest
+        node: 20
+        ruby: 3.4.3
+        xcode-first-launch: true
+        warm-simulators: ["iPhone 17 Pro"]
+        """
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("image.graft")
+        try graft.write(to: file, atomically: true, encoding: .utf8)
+
+        let r = try ImageRecipe.load(from: file.path)
+        #expect(r.node == "20")                  // bare int coerced to string
+        #expect(r.ruby == "3.4.3")
+        #expect(r.xcodeFirstLaunch == true)
+        #expect(r.warmSimulators == ["iPhone 17 Pro"])
+    }
+
     @Test("the starter template is valid YAML that loads")
     func template() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -58,6 +110,7 @@ struct ImageRecipeTests {
         let r = try ImageRecipe.load(from: file.path)
         #expect(!r.name.isEmpty)
         #expect(!r.from.isEmpty)
-        #expect(r.run.count == 1)                       // template uses a run: | block
+        #expect(r.node != nil)                          // template showcases declarative fields
+        #expect(r.provisioning(scriptBody: nil) != nil) // and compiles to something runnable
     }
 }
