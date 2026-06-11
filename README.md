@@ -180,10 +180,11 @@ passwords. Stock cirruslabs images ship the agent; custom images must include it
 ## Install
 
 ```sh
-brew install briancorbin/tap/graft
+brew install briancorbin/tap/graft             # CLI + daemon
+brew install --cask briancorbin/tap/graft-app  # menu-bar app (also installs the CLI)
 ```
 
-(Requires Apple Silicon + [Tart](https://tart.run). The formula pulls in Tart as a dependency.)
+Apple Silicon only. [Tart](https://tart.run) is pulled in as a dependency.
 
 ## License
 
