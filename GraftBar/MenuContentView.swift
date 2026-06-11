@@ -22,6 +22,7 @@ struct MenuContentView: View {
 
             Divider()
             runnerList
+            orphanSection
             Divider()
             actions
         }
@@ -85,6 +86,25 @@ struct MenuContentView: View {
                     Text(runner.vm.ip).font(.caption).foregroundStyle(.secondary)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var orphanSection: some View {
+        if !controller.orphans.isEmpty {
+            Divider()
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text("\(controller.orphans.count) orphaned VM\(controller.orphans.count == 1 ? "" : "s")")
+                    .font(.subheadline)
+                    .foregroundStyle(.orange)
+            }
+            Text("a daemon didn't shut down cleanly — Start also sweeps these")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Button("Remove orphans") { controller.killOrphans() }
+                .disabled(busy)
         }
     }
 

@@ -17,6 +17,9 @@ final class GraftController: ObservableObject {
     /// True only while tearing down — blocks double-Stop (Start may still be
     /// interrupted by Stop).
     @Published var isStopping = false
+    /// graft-managed VMs still on the host while no daemon is running — left by a
+    /// daemon that didn't shut down cleanly (e.g. SIGKILL).
+    @Published var orphans: [String] = []
 
     private let state = StateManager()
     private var timer: Timer?
@@ -28,8 +31,12 @@ final class GraftController: ObservableObject {
 
     init() {
         refresh()
+        refreshOrphans()
         timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refresh() }
+            Task { @MainActor in
+                self?.refresh()
+                self?.refreshOrphans()
+            }
         }
     }
 
@@ -101,6 +108,40 @@ final class GraftController: ObservableObject {
     }
 
     var graftInstalled: Bool { Self.graftPath != nil }
+
+    /// While stopped, look for leftover graft VMs on the host (off the main thread).
+    func refreshOrphans() {
+        guard !isRunning, let graft = Self.graftPath else {
+            if !orphans.isEmpty { orphans = [] }
+            return
+        }
+        DispatchQueue.global(qos: .utility).async {
+            let names = Self.capture(graft, ["vm", "list"])
+                .split(separator: "\n")
+                .compactMap { line -> String? in
+                    let name = String(line.split(separator: "\t").first ?? "")
+                    return name.hasPrefix("graft-") ? name : nil
+                }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isRunning else { return }
+                self.orphans = names
+            }
+        }
+    }
+
+    /// Stop + delete every orphan VM (via `graft vm delete`).
+    func killOrphans() {
+        guard let graft = Self.graftPath, !orphans.isEmpty else { return }
+        let names = orphans
+        actionNote = "Removing \(names.count) orphan VM\(names.count == 1 ? "" : "s")…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            for name in names { _ = Self.capture(graft, ["vm", "delete", name]) }
+            DispatchQueue.main.async { [weak self] in
+                self?.actionNote = nil
+                self?.refreshOrphans()
+            }
+        }
+    }
 
     // MARK: Poll loops (token-guarded)
 
@@ -193,5 +234,25 @@ final class GraftController: ObservableObject {
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         return env
+    }
+
+    /// Run a command and capture stdout. For short reads like `graft vm list`.
+    /// Call off the main thread — it blocks until the process exits.
+    private static func capture(_ launchPath: String, _ arguments: [String]) -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: launchPath)
+        process.arguments = arguments
+        process.environment = augmentedEnvironment
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+        do {
+            try process.run()
+        } catch {
+            return ""
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(decoding: data, as: UTF8.self)
     }
 }
