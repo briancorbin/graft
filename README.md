@@ -1,25 +1,32 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="Assets/header-dark.png">
-    <img src="Assets/header-light.png" alt="Graft — ephemeral GitHub Actions runners on Tart VMs" width="480">
+    <img src="Assets/header-light.png" alt="Graft — one golden Tart VM image for your dev box and your CI" width="480">
   </picture>
 </p>
 
-Ephemeral GitHub Actions runners on [Tart](https://tart.run) VMs. An open-source,
-fleet-ready runner manager for macOS and Linux CI.
+One golden [Tart](https://tart.run) VM image for macOS & Linux that powers both your
+**dev environment** and your **ephemeral CI runners**. Open-source and fleet-ready.
 
-Each runner boots a fresh macOS or Linux VM, registers with GitHub, runs **exactly
-one job**, then tears itself down. No persistent runners, no state drift, no
-leftover secrets — ephemerality is enforced by construction (JIT runners), not by
-convention.
+Graft does three things off one `.graft` image recipe:
+
+- **`graft image build`** — bake a golden VM with your full toolchain and warm caches
+  (Xcode, Node, CocoaPods, Detox…) baked in.
+- **`graft dev`** — develop *inside* that VM over VS Code Remote-SSH. Codespaces for
+  native macOS/iOS, off the exact image your CI uses.
+- **`graft run`** — ephemeral GitHub Actions runners: each boots a fresh VM, registers
+  with GitHub, runs **exactly one job**, then tears itself down. No state drift, no
+  leftover secrets — ephemerality is enforced by construction (JIT runners), not by
+  convention.
+
+Because dev and CI share one image, "works on my machine" stops being a thing.
 
 ## Why
 
 - Built for **fleets**: scale to any number of runners across hosts, with Apple's
   per-host macOS-VM limits respected by construction.
-- **One image, dev and CI** — `graft image build` bakes a golden `.graft` image
-  that backs both `graft dev` (dev *in* the VM over VS Code Remote-SSH) and every
-  ephemeral CI runner, so "works on my machine" stops being a thing.
+- **Warm by default** — caches bake into the image via APFS copy-on-write, so every
+  ephemeral runner gets an instant private warm cache; "refresh" is just a rebuild.
 - Designed from day one to swap a local Tart backend for an [Orchard](https://github.com/cirruslabs/orchard)
   fleet without touching the runner logic.
 

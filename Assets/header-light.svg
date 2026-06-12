@@ -8,5 +8,5 @@
     <path d="M40 35 Q29 19 50 12 Q49 31 40 35 Z"/>
   </g>
   <text x="138" y="60" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="42" font-weight="bold" fill="#1c1c1e">Graft</text>
-  <text x="140" y="86" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" fill="#5f5f63">Ephemeral GitHub Actions runners on Tart VMs</text>
+  <text x="140" y="86" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15.5" fill="#5f5f63">One golden Tart VM image — dev box and CI</text>
 </svg>
