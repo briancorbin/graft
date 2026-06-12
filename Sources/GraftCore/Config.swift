@@ -113,7 +113,7 @@ public struct OrchardConfig: Codable, Sendable {
     /// Service account the controller authenticates graft as (needs VM compute rights).
     public var serviceAccount: String
     /// Service-account token. Optional: when nil it's resolved from the Keychain
-    /// (`graft orchard init` stores it there, keyed by `serviceAccount`), so it never
+    /// (`graft init` stores it there, keyed by `serviceAccount`), so it never
     /// has to sit in plaintext config. An unsecured local `orchard dev` controller
     /// ignores it entirely. See `Run.makeProvider` for the resolution order.
     public var token: String?

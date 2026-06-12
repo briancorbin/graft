@@ -158,7 +158,7 @@ public struct OrchardProvider: VMProvider {
 
     /// A live snapshot of the fleet: workers (with advertised slots), how many VMs are
     /// placed cluster-wide, and which of those are graft's. Backs both `capacity()` and
-    /// the `graft orchard status|workers` surfaces.
+    /// the `graft tree status|branches` surfaces.
     public struct FleetReport: Sendable {
         public let controllerURL: String
         public let workers: [OrchardWorker]
@@ -173,7 +173,7 @@ public struct OrchardProvider: VMProvider {
 
     /// Query the controller for a live fleet snapshot. One `get worker` call per worker
     /// — the CLI has no bulk resource view — but the callers (`capacity()` at planning
-    /// time, `graft orchard status`) are not hot loops, so the N+1 is fine. Throws if
+    /// time, `graft tree status`) are not hot loops, so the N+1 is fine. Throws if
     /// the controller is unreachable so `capacity` can fall back to the static ceiling.
     public func report() async throws -> FleetReport {
         let workersRaw = try await runOrchard(["list", "workers"])
@@ -189,7 +189,7 @@ public struct OrchardProvider: VMProvider {
         )
     }
 
-    /// Raw `orchard list <resource>` table output (e.g. for `graft orchard vms`), so the
+    /// Raw `orchard list <resource>` table output (e.g. for `graft tree leaves`), so the
     /// command surface can pass the controller's own formatting straight through.
     public func rawList(_ resource: String) async throws -> String {
         try await runOrchard(["list", resource])
