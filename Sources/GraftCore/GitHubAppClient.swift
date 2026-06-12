@@ -150,7 +150,7 @@ public struct GitHubAppClient: Sendable {
         return decoder
     }()
 
-    // MARK: Auth chain (each step public so `graft doctor` can report it)
+    // MARK: Auth chain (each step public so `graft arborist` can report it)
 
     /// Read the PEM from the secret store and sign the App JWT.
     public func makeAppJWT() async throws -> String {

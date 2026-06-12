@@ -9,8 +9,8 @@ struct Graft: AsyncParsableCommand {
         abstract: "Ephemeral GitHub Actions runners on Tart VMs.",
         version: "0.2.0",
         subcommands: [
-            Init.self, Run.self, Status.self, Stop.self, Doctor.self,
-            Profile.self, Pool.self, VM.self, ConfigCommand.self, Secrets.self,
+            Init.self, Run.self, Status.self, Stop.self, Arborist.self,
+            Profile.self, Pool.self, Leaf.self, ConfigCommand.self, Secrets.self,
             Runners.self, Image.self, Dev.self, Orchard.self,
         ]
     )
@@ -22,7 +22,7 @@ extension GuestOS: ExpressibleByArgument {
 }
 
 /// Write a line to stderr (progress, warnings, errors) — keeps stdout clean for
-/// machine-readable output like `graft vm create`'s `name<TAB>ip`.
+/// machine-readable output like `graft leaf create`'s `name<TAB>ip`.
 func printErr(_ message: String) {
     FileHandle.standardError.write(Data((message + "\n").utf8))
 }

@@ -1,17 +1,17 @@
 import ArgumentParser
 import GraftCore
 
-/// `graft vm …` — low-level VM plumbing. The supervisor uses `VMProvider`
+/// `graft leaf …` — low-level VM (leaf) plumbing. The supervisor uses `VMProvider`
 /// directly; these commands are for humans poking at the layer underneath.
-struct VM: AsyncParsableCommand {
+struct Leaf: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "vm",
-        abstract: "Low-level VM plumbing (clone, boot, list, destroy).",
-        subcommands: [Create.self, Delete.self, List.self, IP.self]
+        commandName: "leaf",
+        abstract: "Low-level VM (leaf) plumbing (clone, boot, list, destroy).",
+        subcommands: [Create.self, Remove.self, List.self, IP.self]
     )
 }
 
-extension VM {
+extension Leaf {
     struct Create: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             abstract: "Clone + boot a VM, wait for its IP, print `name<TAB>ip`."
@@ -32,10 +32,10 @@ extension VM {
         }
     }
 
-    struct Delete: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(abstract: "Stop and destroy a VM.")
+    struct Remove: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(commandName: "rm", abstract: "Stop and destroy a leaf (VM).")
 
-        @Argument(help: "VM name (graft-…).")
+        @Argument(help: "Leaf (VM) name (graft-…).")
         var name: String
 
         func run() async throws {

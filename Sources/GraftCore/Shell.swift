@@ -236,7 +236,7 @@ public enum Shell {
 
     /// Launch a command fully detached (`nohup … &`) so it survives this process
     /// exiting. Used for `tart run`, where the VM stays alive only as long as the
-    /// run process does — and we want `graft vm create` to return while it keeps
+    /// run process does — and we want `graft leaf create` to return while it keeps
     /// running. Returns as soon as the shell backgrounds the job.
     public static func launchDetached(_ command: String) throws {
         let process = Process()

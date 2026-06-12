@@ -3,7 +3,7 @@ import Foundation
 /// `VMProvider` backed by the local `tart` CLI. Phase 1 backend — the supervisor
 /// talks to this exactly the way it will later talk to Orchard.
 public struct LocalTartProvider: VMProvider {
-    /// Prefix for every VM graft creates, so `graft vm list` and teardown can tell
+    /// Prefix for every VM graft creates, so `graft leaf list` and teardown can tell
     /// graft-managed VMs apart from anything else on the host.
     public static let namePrefix = "graft-"
 
@@ -65,7 +65,7 @@ public struct LocalTartProvider: VMProvider {
         )
     }
 
-    /// VMs graft created on this host (by name prefix). Backs `graft vm list`.
+    /// VMs graft created on this host (by name prefix). Backs `graft leaf list`.
     public func graftManagedVMs() async throws -> [TartVM] {
         try await Tart.list().filter { $0.name.hasPrefix(Self.namePrefix) }
     }

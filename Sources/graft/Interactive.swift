@@ -321,7 +321,7 @@ enum Wizard {
         } else {
             for problem in problems { printErr("  ⚠ \(problem)") }
         }
-        printErr("\nNext:  graft doctor   (verify GitHub auth)   then   graft run")
+        printErr("\nNext:  graft arborist   (verify GitHub auth)   then   graft run")
         return profileName
     }
 }

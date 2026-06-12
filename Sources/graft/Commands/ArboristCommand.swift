@@ -2,17 +2,17 @@ import ArgumentParser
 import Foundation
 import GraftCore
 
-/// `graft doctor` — verify the whole GitHub App auth chain against the real API
-/// without booting a VM: read key → sign JWT → find installation → mint token →
-/// create a probe JIT runner → delete it. Leaves no trace on the org.
+/// `graft arborist` — the tree-doctor: verify the whole GitHub App auth chain against
+/// the real API without booting a VM: read key → sign JWT → find installation → mint
+/// token → create a probe JIT runner → delete it. Leaves no trace on the org.
 ///
 /// Run it bare and it picks the App from the keys in your keychain and prompts for
 /// the target; or pass `--app-id`/`--target` to skip the prompts; or `--config`/
 /// `--pool` to check pools from a config file.
-struct Doctor: AsyncParsableCommand {
+struct Arborist: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "doctor",
-        abstract: "Verify the GitHub App auth chain end-to-end (no VM boot)."
+        commandName: "arborist",
+        abstract: "Tree-doctor: verify the GitHub App auth chain end-to-end (no VM boot)."
     )
 
     @Option(name: .long, help: "GitHub App ID (default: pick from keys in the keychain).")
