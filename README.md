@@ -142,7 +142,8 @@ graft pool list [--profile NAME]
 graft image build -f <recipe.graft>     Build a golden image (declarative toolchain)
 graft image render -f <recipe.graft>    Preview the compiled provisioning script
 graft image list / rm / prune / push / pull / template   Manage images (prune clears orphaned build VMs)
-graft dev [--image N] [--ephemeral] [--network bridged:en0] [-- CMD]   Local dev VM with your repo mounted
+graft dev [<repo>|<box>|.] [--code]     Dev box: clone a repo / resume a box / mount '.' (docs/dev-boxes.md)
+graft dev ls / rm [box]                 List / remove dev boxes
 
 graft vm create <image> [--os macos|linux]   Clone + boot a VM, print name<TAB>ip
 graft vm delete <name>                  Stop + destroy a VM
@@ -182,8 +183,8 @@ blocked (e.g. behind Zscaler). Drop to a `run:` block or `script:` for anything 
 ```sh
 graft image render -f examples/images/rn-detox.graft  # preview the compiled script
 graft image build  -f examples/images/rn-detox.graft  # build the golden image
-graft dev --image rn-detox                            # shell into it, $PWD mounted
-graft dev --image rn-detox -- npx detox test e2e/     # or run a command
+graft dev your-org/app                                # clone into a dev box, shell in
+graft dev your-org/app --code                         # …or open VS Code inside the VM
 ```
 
 Ready-to-adapt recipes (React Native/Detox, iOS/Fastlane, Node, script-based) live in
@@ -191,29 +192,24 @@ Ready-to-adapt recipes (React Native/Detox, iOS/Fastlane, Node, script-based) li
 **[VS Code extension](editors/vscode/)** (highlighting incl. embedded shell, field
 completion/hover, render/build commands).
 
-### Dev *in* the VM (`--code`)
+### Dev *in* the VM
 
-`graft dev --code` makes the VM your dev box and the host a thin client: it opens **VS
-Code over Remote-SSH** *into* the VM. Source, `node_modules`, Pods, language servers,
-the terminal, and builds all run guest-side against the baked toolchain — off the same
-image your CI runs, so "works on my machine" is gone. graft mints a dedicated SSH key,
-injects it, and writes a self-managed `~/.ssh/graft.config` (you never touch `tart`/`ssh`).
+A **dev box** is a VM cloned from one of your golden images — same toolchain as CI, host
+stays a thin client. `--code` opens **VS Code over Remote-SSH** *into* the box, so the
+editor, terminal, language servers, and builds run guest-side. It's Codespaces, but for
+native macOS/iOS.
 
 ```sh
-graft dev --repo your-org/app --code        # fresh clone INTO the VM, open VS Code (host stays empty)
-graft dev --code                            # in a repo dir: seed your working tree (keeps WIP)
-graft dev --code                            # elsewhere: pick a box to reattach, or a repo to clone
+graft dev                      # picker: resume a box / clone a repo / mount here / scratch
+graft dev your-org/app         # clone → persistent box, shell in   (--code for VS Code)
+graft dev app                  # resume it
+graft dev .                    # mount $PWD → ephemeral box → run here
+graft dev ls / rm [box]        # list / remove boxes
 ```
 
-- **`--repo <owner/name | url>`** clones fresh from the remote into a per-repo box
-  (`graft-dev-app`), over agent-forwarded SSH — so private repos work and `git push`
-  from inside the VM uses your host key, **nothing baked**. Add `--ref <branch|tag>`.
-  Requires your key in the ssh-agent (`ssh-add`).
-- **No `--repo`, in a repo dir** seeds your local checkout (uncommitted WIP and all);
-  **elsewhere** you get a picker: reattach an existing box, or clone one of the repos
-  your GitHub App can reach.
-- Boxes are **persistent + per-repo** — reattach with `graft dev --code`, remove with
-  `graft vm delete graft-dev-app`.
+The model: **clone → persistent & resumable**; **mount (`.`) / scratch → ephemeral**.
+Full guide — clone vs mount, `--code`, the picker, advanced flags — in
+**[docs/dev-boxes.md](docs/dev-boxes.md)**.
 
 ## Architecture
 
@@ -233,6 +229,13 @@ PoolSupervisor (actor, desired-state loop)
 
 Provisioning uses **`tart exec`** (Tart Guest Agent) — no SSH, no keys, no
 passwords. Stock cirruslabs images ship the agent; custom images must include it.
+
+## Documentation
+
+- **[docs/dev-boxes.md](docs/dev-boxes.md)** — `graft dev`: clone vs mount, persistence, `--code`, the picker
+- **[docs/images-and-caching.md](docs/images-and-caching.md)** — `.graft` recipes, the full field reference, CoW caching
+- **[docs/ec2-mac-setup.md](docs/ec2-mac-setup.md)** — headless / EC2 Mac runners (auto-login, bridged networking)
+- **[editors/vscode/](editors/vscode/)** — the `.graft` VS Code extension
 
 ## Roadmap
 

@@ -149,13 +149,14 @@ enum TargetPicker {
     }
 }
 
-/// The `graft dev --code` entry picker: reattach an existing dev box, clone a new repo
-/// (from the repos the GitHub App can reach), or spin up an empty scratch box.
+/// The `graft dev` entry picker: resume a persistent box, clone a repo (from the repos the
+/// GitHub App can reach), mount the current directory (ephemeral), or a scratch box.
 enum DevBoxPicker {
     enum Choice {
-        case reattach(String)               // existing dev VM name
+        case resume(String)                 // existing persistent dev box
         case clone(url: String, name: String)
-        case scratch
+        case mount                          // mount $PWD, ephemeral
+        case scratch                        // empty ephemeral box
         case cancelled
     }
 
@@ -164,21 +165,27 @@ enum DevBoxPicker {
             .filter { $0.name.hasPrefix("graft-dev-") && !$0.name.hasPrefix("graft-dev-eph-") }
             .sorted { $0.name < $1.name }
 
-        var options = boxes.map { "reattach \($0.name)  (\($0.state))" }
-        let cloneIndex = options.count
-        options.append("clone a new repo…")
-        let scratchIndex = options.count
-        options.append("new scratch box…")
+        var options = boxes.map { "resume \($0.name.replacingOccurrences(of: "graft-dev-", with: ""))  (\($0.state))" }
+        let cloneIndex = options.count;   options.append("clone a repo…")
+        let mountIndex = options.count;   options.append("mount this directory (ephemeral)")
+        let scratchIndex = options.count; options.append("scratch box (ephemeral)")
 
-        let choice = Prompt.choose("Which dev box?", options)
-        if choice < boxes.count { return .reattach(boxes[choice].name) }
-        if choice == cloneIndex {
+        let choice = Prompt.choose("Dev box?", options)
+        if choice < boxes.count { return .resume(boxes[choice].name) }
+        switch choice {
+        case cloneIndex:
             guard let spec = await pickRepo(profile: profile) else { return .cancelled }
             let (url, name) = DevCode.expandRepoSpec(spec)
             return .clone(url: url, name: name)
+        case mountIndex: return .mount
+        case scratchIndex: return .scratch
+        default: return .cancelled
         }
-        if choice == scratchIndex { return .scratch }
-        return .cancelled
+    }
+
+    /// Ask how to connect (shell is the default everyone has; VS Code is opt-in).
+    static func askConnect() -> Bool {   // returns true for VS Code
+        Prompt.choose("Open with?", ["shell", "VS Code (Remote-SSH)"]) == 1
     }
 
     /// Pick a repo from the GitHub App's accessible repos (best-effort), or type one.
