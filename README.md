@@ -191,6 +191,30 @@ Ready-to-adapt recipes (React Native/Detox, iOS/Fastlane, Node, script-based) li
 **[VS Code extension](editors/vscode/)** (highlighting incl. embedded shell, field
 completion/hover, render/build commands).
 
+### Dev *in* the VM (`--code`)
+
+`graft dev --code` makes the VM your dev box and the host a thin client: it opens **VS
+Code over Remote-SSH** *into* the VM. Source, `node_modules`, Pods, language servers,
+the terminal, and builds all run guest-side against the baked toolchain — off the same
+image your CI runs, so "works on my machine" is gone. graft mints a dedicated SSH key,
+injects it, and writes a self-managed `~/.ssh/graft.config` (you never touch `tart`/`ssh`).
+
+```sh
+graft dev --repo your-org/app --code        # fresh clone INTO the VM, open VS Code (host stays empty)
+graft dev --code                            # in a repo dir: seed your working tree (keeps WIP)
+graft dev --code                            # elsewhere: pick a box to reattach, or a repo to clone
+```
+
+- **`--repo <owner/name | url>`** clones fresh from the remote into a per-repo box
+  (`graft-dev-app`), over agent-forwarded SSH — so private repos work and `git push`
+  from inside the VM uses your host key, **nothing baked**. Add `--ref <branch|tag>`.
+  Requires your key in the ssh-agent (`ssh-add`).
+- **No `--repo`, in a repo dir** seeds your local checkout (uncommitted WIP and all);
+  **elsewhere** you get a picker: reattach an existing box, or clone one of the repos
+  your GitHub App can reach.
+- Boxes are **persistent + per-repo** — reattach with `graft dev --code`, remove with
+  `graft vm delete graft-dev-app`.
+
 ## Architecture
 
 Everything pivots on **`VMProvider`** — `capacity`, `acquire`, `release`, plus an

@@ -75,7 +75,19 @@ public enum Shell {
                 let clock = ContinuousClock()
                 let deadline = clock.now.advanced(by: timeout)
                 while box.value.isRunning {
-                    if clock.now >= deadline { timedOut = true; box.value.terminate(); break }
+                    if clock.now >= deadline {
+                        timedOut = true
+                        box.value.terminate()                      // SIGTERM
+                        try? await Task.sleep(for: .milliseconds(150))
+                        if box.value.isRunning { kill(box.value.processIdentifier, SIGKILL) }
+                        // Close the pipe read-ends so the drains can't block forever on a
+                        // child that still holds the write-end open (e.g. the keychain
+                        // helper spawned by `gh auth token`). Without this, terminating the
+                        // process isn't enough — the read() never sees EOF.
+                        try? outPipe.fileHandleForReading.close()
+                        try? errPipe.fileHandleForReading.close()
+                        break
+                    }
                     try? await Task.sleep(for: .milliseconds(50))
                 }
             }

@@ -149,6 +149,69 @@ enum TargetPicker {
     }
 }
 
+/// The `graft dev --code` entry picker: reattach an existing dev box, clone a new repo
+/// (from the repos the GitHub App can reach), or spin up an empty scratch box.
+enum DevBoxPicker {
+    enum Choice {
+        case reattach(String)               // existing dev VM name
+        case clone(url: String, name: String)
+        case scratch
+        case cancelled
+    }
+
+    static func resolve(profile: String?) async -> Choice {
+        let boxes = ((try? await Tart.list()) ?? [])
+            .filter { $0.name.hasPrefix("graft-dev-") && !$0.name.hasPrefix("graft-dev-eph-") }
+            .sorted { $0.name < $1.name }
+
+        var options = boxes.map { "reattach \($0.name)  (\($0.state))" }
+        let cloneIndex = options.count
+        options.append("clone a new repo…")
+        let scratchIndex = options.count
+        options.append("new scratch box…")
+
+        let choice = Prompt.choose("Which dev box?", options)
+        if choice < boxes.count { return .reattach(boxes[choice].name) }
+        if choice == cloneIndex {
+            guard let spec = await pickRepo(profile: profile) else { return .cancelled }
+            let (url, name) = DevCode.expandRepoSpec(spec)
+            return .clone(url: url, name: name)
+        }
+        if choice == scratchIndex { return .scratch }
+        return .cancelled
+    }
+
+    /// Pick a repo from the GitHub App's accessible repos (best-effort), or type one.
+    static func pickRepo(profile: String?) async -> String? {
+        var repos: [String] = []
+        if let (appID, scope) = appCredentials(profile: profile) {
+            let client = GitHubAppClient(appID: appID, secrets: KeychainSecretStore(scope: scope))
+            if let targets = try? await withTimeout(seconds: 6, { try await client.accessibleTargets() }) {
+                repos = targets.filter { $0.hasPrefix("repo:") }.map { String($0.dropFirst(5)) }.sorted()
+            }
+        }
+        guard !repos.isEmpty else {
+            let typed = Prompt.line("Repo (owner/name or git URL)")
+            return typed.isEmpty ? nil : typed
+        }
+        var options = repos
+        options.append("enter a custom repo…")
+        let choice = Prompt.choose("Which repo?", options)
+        if choice < repos.count { return repos[choice] }
+        let typed = Prompt.line("Repo (owner/name or git URL)")
+        return typed.isEmpty ? nil : typed
+    }
+
+    /// The active (or named) profile's App id + keychain scope, for the repo list.
+    private static func appCredentials(profile: String?) -> (Int, KeychainScope)? {
+        guard let name = try? resolveProfileName(profile),
+              let cfg = try? Profiles.load(name),
+              let appID = cfg.pools.first?.github.appId else { return nil }
+        let scope = KeychainScope(rawValue: cfg.secrets?.scope ?? "login") ?? .login
+        return (appID, scope)
+    }
+}
+
 /// Run `operation`, but give up after `seconds` (e.g. a wizard network call that
 /// shouldn't hang the prompt on a bad connection). Cancels the operation on timeout.
 func withTimeout<T: Sendable>(
@@ -175,8 +238,10 @@ enum ImagePicker {
         let available = (try? await Tart.list()) ?? []
 
         // Drop digest-pinned duplicates (`name@sha256:…`) — the tag/name ref is
-        // what people clone from. Dedupe and sort.
-        let names = available.map(\.name).filter { !$0.contains("@sha256:") }
+        // what people clone from — and graft's own dev/build VMs (not base images).
+        let names = available.map(\.name).filter {
+            !$0.contains("@sha256:") && !$0.hasPrefix("graft-dev-") && !$0.hasPrefix("graft-imgbuild-")
+        }
         let unique = Array(Set(names)).sorted()
         guard !unique.isEmpty else { return Prompt.required(prompt) }
 
