@@ -364,10 +364,18 @@ enum Wizard {
             return
         }
         let token: String
-        if Prompt.confirm("Create service account '\(account)' on the trunk now? (needs admin access)", default: true) {
+        if Prompt.confirm("Create service account '\(account)' on the trunk now?", default: true) {
             token = UUID().uuidString.lowercased()
             var env = ProcessInfo.processInfo.environment
             env[OrchardEnv.url] = url.absoluteString
+            // If we planted this trunk here (`graft tree plant`), use its captured admin
+            // token to authenticate the create. A remote trunk falls back to your own
+            // `orchard` admin context (or pasting a token if you lack admin).
+            if let admin = try? String(contentsOfFile: Tree.adminTokenFile, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines), !admin.isEmpty {
+                env[OrchardEnv.accountName] = "bootstrap-admin"
+                env[OrchardEnv.accountToken] = admin
+            }
             let result = try await Shell.run("orchard", [
                 "create", "service-account", account,
                 "--roles", "compute:read", "--roles", "compute:write", "--roles", "compute:connect",
