@@ -1,6 +1,10 @@
+![Graft](https://raw.githubusercontent.com/briancorbin/graft/main/Assets/header-dark.png)
+
 # Graft for VS Code
 
-Editor support for **`.graft`** image recipes (and `Graftfile`).
+Editor support for **`.graft`** image recipes (and `Graftfile`) — the declarative recipes
+behind [Graft](https://github.com/briancorbin/graft), which builds golden Tart VM images
+for macOS & Linux dev environments and ephemeral CI runners.
 
 - **Syntax highlighting** — graft keywords colored, and the bash inside `run: |` /
   `script: |` blocks highlighted as shell (the pretty part).
@@ -10,21 +14,21 @@ Editor support for **`.graft`** image recipes (and `Graftfile`).
 - **Commands** — `Graft: Render compiled provisioning script` (an eye icon in the editor
   title bar) and `Graft: Build image from this recipe`. Both shell out to the `graft`
   CLI on your PATH.
-- **JSON schema** — bundled at [`schemas/graft.schema.json`](schemas/graft.schema.json).
+- **File icon** — `.graft` files get the Graft mark in icon themes that support language
+  icons (e.g. Seti, the default).
+- **JSON schema** — bundled at
+  [`schemas/graft.schema.json`](https://github.com/briancorbin/graft/blob/main/editors/vscode/schemas/graft.schema.json).
 
 ## Install
 
-**Try it (dev):** open this folder (`editors/vscode`) in VS Code and press **F5** — a
-new "Extension Development Host" window launches with the extension loaded. Open any
-`.graft` file there.
-
-**Use it everywhere:** symlink it into your extensions folder and reload VS Code:
+From the Extensions view (`⇧⌘X`), search **Graft** and click Install — or:
 
 ```sh
-ln -s "$PWD/editors/vscode" ~/.vscode/extensions/graft-0.1.0
+code --install-extension briancorbin.graft
 ```
 
-**Or package a `.vsix`:**
+**Build from source:** open `editors/vscode` in VS Code and press **F5** for an Extension
+Development Host, or package a `.vsix` yourself:
 
 ```sh
 cd editors/vscode

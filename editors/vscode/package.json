@@ -5,9 +5,16 @@
   "version": "0.1.0",
   "publisher": "briancorbin",
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/briancorbin/graft" },
+  "icon": "icon.png",
+  "repository": { "type": "git", "url": "https://github.com/briancorbin/graft", "directory": "editors/vscode" },
+  "homepage": "https://github.com/briancorbin/graft#readme",
+  "bugs": { "url": "https://github.com/briancorbin/graft/issues" },
   "engines": { "vscode": "^1.75.0" },
   "categories": ["Programming Languages", "Snippets"],
+  "keywords": ["graft", "tart", "ci", "github actions", "macos", "vm", "image", "devcontainer"],
+  "galleryBanner": { "color": "#1f2024", "theme": "dark" },
+  "pricing": "Free",
+  "qna": false,
   "main": "./extension.js",
   "activationEvents": ["onLanguage:graft"],
   "contributes": {
@@ -17,7 +24,8 @@
         "aliases": ["Graft", "graft"],
         "extensions": [".graft"],
         "filenames": ["Graftfile"],
-        "configuration": "./language-configuration.json"
+        "configuration": "./language-configuration.json",
+        "icon": { "light": "./icons/graft-light.svg", "dark": "./icons/graft-dark.svg" }
       }
     ],
     "grammars": [

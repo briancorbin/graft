@@ -23,3 +23,6 @@ config.local.json
 # App release pipeline
 dist/
 .build-app/
+
+# VS Code extension build artifacts
+editors/vscode/*.vsix
