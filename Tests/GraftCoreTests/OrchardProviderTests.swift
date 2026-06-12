@@ -75,6 +75,13 @@ struct OrchardProviderTests {
         #expect(OrchardProvider.graftVMNames(in: "").isEmpty)
     }
 
+    @Test("ssh args never pass --wait 0 (Orchard treats --wait as the port-forward deadline)")
+    func sshArgsNoWaitZero() {
+        let args = OrchardProvider.sshArgs(vmName: "graft-x", remoteCommand: "true")
+        #expect(args == ["ssh", "vm", "graft-x", "true"])
+        #expect(!args.contains("--wait"))   // 0 would starve the rendezvous → instant deadline-exceeded
+    }
+
     // MARK: env injection
 
     @Test("auth + endpoint are injected into the orchard environment")

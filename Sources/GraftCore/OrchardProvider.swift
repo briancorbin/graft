@@ -74,11 +74,10 @@ public struct OrchardProvider: VMProvider {
     }
 
     public func exec(on vm: RunningVM, _ command: [String], timeout: Duration? = nil) async throws -> ShellResult {
-        // `orchard ssh vm --wait 0 NAME "<cmd>"` runs over the controller's SSH tunnel.
-        // --wait 0: the VM is already running (acquire waited), so don't re-wait for it.
+        // `orchard ssh vm NAME "<cmd>"` runs over the controller's SSH tunnel.
         try await Shell.run(
             Self.executable,
-            ["ssh", "vm", "--wait", "0", vm.name, command.joined(separator: " ")],
+            Self.sshArgs(vmName: vm.name, remoteCommand: command.joined(separator: " ")),
             environment: env,
             timeout: timeout
         )
@@ -90,11 +89,23 @@ public struct OrchardProvider: VMProvider {
         // 0/non-zero distinction, which is preserved (exact non-zero codes are not).
         try await Shell.runStreaming(
             Self.executable,
-            ["ssh", "vm", "--wait", "0", vm.name, "bash -s"],
+            Self.sshArgs(vmName: vm.name, remoteCommand: "bash -s"),
             stdin: script,
             environment: env,
             onLine: onLine
         )
+    }
+
+    /// `orchard ssh vm <name> <remoteCommand>` argv.
+    ///
+    /// ⚠️ Do NOT pass `--wait 0`. Orchard's `--wait` is the deadline for the *entire
+    /// port-forward rendezvous* (the controller waiting for the worker to pick up the
+    /// request and stand up the SSH tunnel) — not merely "wait for the VM to be running".
+    /// `--wait 0` gives that rendezvous a zero deadline, so it dies in ~100µs with
+    /// "context deadline exceeded" before the worker can ever respond, and exec never
+    /// works. Omitting `--wait` uses Orchard's 60s default, which is what we want.
+    static func sshArgs(vmName: String, remoteCommand: String) -> [String] {
+        ["ssh", "vm", vmName, remoteCommand]
     }
 
     /// Delete every graft-managed VM still registered on the controller (by name prefix).
