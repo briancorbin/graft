@@ -341,8 +341,14 @@ enum Wizard {
         guard let v = try? await Shell.run("orchard", ["--version"]), v.succeeded else {
             throw GraftError("`orchard` not found on PATH — install it: brew install cirruslabs/cli/orchard")
         }
-        let urlString = Prompt.line("Trunk (controller) URL",
-                                    default: config.orchard?.controllerURL.absoluteString ?? "https://orchard.example.com:6120")
+        // A locally-planted trunk (admin token captured here) serves plain HTTP on
+        // localhost — default to that so a bonsai is just "hit enter"; otherwise suggest
+        // the https form a remote controller would use.
+        let defaultURL = config.orchard?.controllerURL.absoluteString
+            ?? (FileManager.default.fileExists(atPath: Tree.adminTokenFile)
+                ? "http://127.0.0.1:6120"
+                : "https://orchard.example.com:6120")
+        let urlString = Prompt.line("Trunk (controller) URL", default: defaultURL)
         guard let url = URL(string: urlString), url.scheme != nil else {
             throw GraftError("'\(urlString)' isn't a valid URL")
         }
