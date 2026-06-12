@@ -11,10 +11,57 @@ config, same ephemeral runner loop, same `.graft` images. The only change is
 `provider: "orchard"` plus an `orchard` block. graft asks the controller to create a
 VM; the controller picks a worker with free capacity (and enforces the per-host
 2-macOS limit for you); graft runs the runner over Orchard's SSH tunnel and deletes
-the VM when the job's done.
+the VM when the job's done. (Verified end-to-end — see the bottom of this doc.)
 
-> **Status:** built and unit-tested, but unverified end-to-end without a live
-> controller + worker. Treat the first real run as a shakedown.
+---
+
+## How the fleet works
+
+Three roles, loosely coupled — and that coupling is the whole point:
+
+- **graft is _demand_.** Its job is a desired-state loop: "keep `count` runners alive,
+  forever." It just keeps asking the controller for VMs — it never checks how much room
+  the fleet has.
+- **Workers are _supply_.** A worker (`orchard worker run`) registers with the
+  controller and idles, advertising its free slots. **It never spins up a VM on its own.**
+- **The controller is the _matchmaker_.** It places each of graft's "I need a VM"
+  requests onto a worker with a free slot (respecting each host's 2-macOS-VM cap + labels).
+
+So **adding a host is a no-op event.** The new worker just registers and becomes another
+place the controller _can_ put a VM. On graft's next acquire (seconds away — slots churn
+constantly), the controller starts placing fresh VMs on it. Nobody tells the new Mac to
+do anything; the demand already exists, and it's new supply. Removing a worker is just as
+quiet — its share of the churn lands on the others.
+
+### The ephemeral churn loop
+
+Each of graft's `count` slots runs this forever:
+
+```
+acquire   → orchard create vm → controller places it on a worker → boots → running
+provision → start the JIT runner inside the VM (over the SSH tunnel)
+run       → runner picks up ONE job, runs it, exits (jitconfig is single-use)
+release   → orchard delete vm → worker destroys it
+             └──────────── loop back to acquire (a FRESH VM) ───────────┘
+```
+
+The VM is **never reused** — every job gets a pristine one. Scaling the fleet up or down
+is fully decoupled from graft: it keeps saying "I want `count` runners," and the
+controller rebalances across whatever workers exist. graft never even learns the fleet
+size changed.
+
+### How the runner gets into the VM
+
+graft holds the GitHub App key and mints a **single-use JIT config** (a base64 blob).
+That blob is embedded in a bash provisioning script graft pipes over the **exec tunnel**
+(`orchard ssh vm … bash -s`, script on stdin). The path: graft → controller websocket →
+worker gRPC → worker SSHes into the VM → the VM's `bash -s` runs the script and
+`exec ./run.sh --jitconfig <blob>`. The runner registers with GitHub _from inside the VM_.
+
+Two properties fall out of this: the **worker is a dumb pipe** (it shells bytes between
+the controller tunnel and the VM's sshd — it never parses the script, never touches
+GitHub, holds no secret), and the **App key never leaves graft** — only the disposable
+JIT token travels outward, into a VM that's destroyed after one job.
 
 ---
 
@@ -41,28 +88,59 @@ Each `VMProvider` method maps to one `orchard` subcommand:
 
 | graft | orchard |
 |---|---|
-| acquire | `orchard create vm --image … --os darwin\|linux --restart-policy never [--host-dirs …] [--net-*] graft-<uuid>`, then poll `get vm <name>/status` until `running` |
+| acquire | `orchard create vm --image … --os darwin\|linux [--host-dirs …] [--net-*] graft-<uuid>`, then poll `get vm <name>/status` until `running` |
 | release | `orchard delete vm <name>` |
-| exec | `orchard ssh vm --wait 0 <name> "<cmd>"` |
-| run the runner | `orchard ssh vm --wait 0 <name> "bash -s"` (script on stdin) |
+| exec | `orchard ssh vm <name> "<cmd>"` |
+| run the runner | `orchard ssh vm <name> "bash -s"` (script on stdin) |
+
+graft deliberately passes neither `--restart-policy` (Orchard defaults to `Never`) nor
+`--wait` (Orchard's `--wait` bounds the whole port-forward rendezvous, and `--wait 0`
+would kill it — see Troubleshooting).
 
 graft names every VM `graft-<uuid>` so the shutdown sweep (`orchard list vms`) can
 find and delete its own VMs without touching anything else on the cluster.
 
 ## Setup
 
-### 1. Stand up a controller and workers
-Follow the [Orchard deployment guide](https://tart.run/orchard/deploying-controller/).
-In short: run the controller somewhere reachable, then join one or more Macs as
-workers (`orchard worker run …`). Each worker needs `tart` and — like any Tart
-host — an **active GUI login session** to boot VMs (see
-[ec2-mac-setup.md](ec2-mac-setup.md) for headless hosts).
+For a single-machine smoke test, skip all of this and run **`orchard dev`** (controller
++ worker in one process) — then jump to step 4. For a real fleet:
 
-### 2. Create a service account for graft
-graft authenticates as an Orchard service account with rights to create/manage VMs.
-Create one and grab its token (see `orchard create service-account --help`).
+### 1. Stand up the controller
+Run `orchard controller run` on a host reachable from your Macs and from wherever
+`graft run` lives (it can be a Linux box — the controller only schedules and holds
+state). Add TLS + auth per the
+[Orchard deployment guide](https://tart.run/orchard/deploying-controller/).
 
-### 3. Point graft at the controller
+### 2. Two service accounts
+A fleet uses two, with different roles:
+
+- **graft** — to create/exec/delete VMs:
+  ```sh
+  orchard create service-account graft \
+    --roles compute:read --roles compute:write --roles compute:connect
+  ```
+  Put its token in the `orchard.token` config field below.
+- **workers** — a bootstrap token so Macs can join:
+  ```sh
+  orchard get bootstrap-token <worker-service-account>
+  ```
+
+### 3. Join each Mac as a worker
+On every Apple Silicon Mac that will boot VMs:
+```sh
+orchard worker run https://orchard.example.com:6120 \
+  --bootstrap-token <token> \
+  --name mac-studio-1 \
+  --labels hardware=m4max        # optional — pools can require labels to target hardware
+```
+That's the **entire** per-Mac setup. The worker needs `tart` installed and an **active
+GUI login session** (Virtualization.framework won't boot a VM without one — see
+[ec2-mac-setup.md](ec2-mac-setup.md) for headless Macs); keep it alive with a launchd
+job so it survives reboots. The worker runs **no graft and holds no GitHub creds** — it's
+pure muscle. Add or remove workers anytime; the controller absorbs the change on graft's
+next acquire (see [How the fleet works](#how-the-fleet-works)).
+
+### 4. Point graft at the controller
 ```json
 {
   "provider": "orchard",
@@ -98,6 +176,14 @@ fleet and owns Apple's per-host 2-macOS-VM limit. `maxVMs` (default 100) is just
 ceiling graft fills toward; anything that doesn't fit right now the controller
 queues. So set your pool `count` to the number of runners you actually want and let
 the cluster absorb it.
+
+**If `count` exceeds the fleet's live free slots**, the controller queues the excess
+VMs as `pending`; graft waits up to ~10 min for each to be scheduled, then times out,
+deletes it, and retries. It works — VMs land as workers free up — but **churns** when
+chronically over-subscribed (wasted create→wait→delete cycles). So size `count` / `maxVMs`
+to roughly your real fleet capacity (~2 macOS VMs per worker). graft currently sizes
+against the static `maxVMs`, not live worker availability — improving that is
+[GFT-12](https://linear.app/the-other-brian-corbin/issue/GFT-12).
 
 > **The 2-macOS escape hatch.** Orchard can schedule a macOS image as an `os: linux`
 > VM to dodge the 2-macOS-VM/host cap (the guest still runs macOS; only the
