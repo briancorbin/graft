@@ -24,7 +24,7 @@ for macOS & Linux dev environments and ephemeral CI runners.
 From the Extensions view (`⇧⌘X`), search **Graft** and click Install — or:
 
 ```sh
-code --install-extension briancorbin.graft
+code --install-extension briancorbin.dotgraft
 ```
 
 **Build from source:** open `editors/vscode` in VS Code and press **F5** for an Extension
@@ -33,7 +33,7 @@ Development Host, or package a `.vsix` yourself:
 ```sh
 cd editors/vscode
 npx @vscode/vsce package
-code --install-extension graft-0.1.0.vsix
+code --install-extension dotgraft-0.1.0.vsix
 ```
 
 ## Notes

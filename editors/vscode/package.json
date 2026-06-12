@@ -1,6 +1,6 @@
 {
-  "name": "graft",
-  "displayName": "Graft",
+  "name": "dotgraft",
+  "displayName": "Graft Recipes",
   "description": "Syntax highlighting, snippets, schema, and helpers for .graft image recipes.",
   "version": "0.1.0",
   "publisher": "briancorbin",
