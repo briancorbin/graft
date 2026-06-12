@@ -67,32 +67,38 @@ JIT token travels outward, into a VM that's destroyed after one job.
 
 ## Driving Orchard from graft
 
-You don't have to leave the graft CLI to run a fleet — `graft orchard` wraps the whole
-lifecycle (it still shells out to `orchard` underneath):
+You don't have to leave the graft CLI to run a fleet — graft models it as a **tree**: a
+**trunk** (the controller) with **branches** (workers) that your **leaves** (runner VMs)
+grow on. `graft tree …` wraps the whole lifecycle (it shells out to `orchard` underneath;
+the vendor name only appears in `provider: "orchard"` config):
 
 | Command | What it does |
 |---|---|
-| `graft orchard dev` | Run a local controller + worker (`orchard dev`) in the foreground — a zero-setup local fleet, the way `graft dev` wraps Tart. Ctrl-C stops it. |
-| `graft orchard init [--local]` | Point a profile at a controller: pick/create the graft service account, stash its token in the **Keychain** (never plaintext config), and write the `orchard` block + `provider: "orchard"`. `--local` wires the unsecured `orchard dev` controller (no token). |
-| `graft orchard status` | Fleet health at a glance — controller, worker count, advertised/used/free slots, graft's VM count. |
-| `graft orchard workers` | Per-worker table (advertised `tart-vms` slots, paused state) + the fleet free-slot total. |
-| `graft orchard vms [--all]` | VMs on the controller — graft's by default, the whole cluster with `--all`. |
+| `graft tree plant` | Plant the trunk — run the controller (foreground), capturing the one-time admin token so `branch`/`prune` can authenticate. |
+| `graft tree branch <trunk-url>` | Graft a branch on — run a worker on this Mac that joins the tree (mints its own bootstrap token, or pass `--token`). |
+| `graft tree prune <name>` | Prune a branch — deregister a worker. |
+| `graft tree status` | Tree health — trunk, branch count, advertised/used/free capacity, graft's leaves. |
+| `graft tree branches` | Per-branch table (advertised leaf slots, paused state) + the tree's free-slot total. |
+| `graft tree leaves [--all]` | Leaves (VMs) on the tree — graft's by default, the whole cluster with `--all`. |
 
-A local fleet in two terminals:
+Setup happens in **`graft init`** — it asks the backend (Local Tart · Orchard tree) and,
+for a tree, collects the trunk URL + service account and stashes the token in the
+Keychain. A local fleet, end to end:
 
 ```sh
-graft orchard dev            # terminal 1: controller + worker (leave running)
-graft orchard init --local   # terminal 2: point the active profile at it
-graft orchard status         # sanity-check the fleet
-graft run                    # fill it with runners
+graft tree plant                       # terminal 1: the trunk (leave running)
+graft tree branch http://localhost:6120  # terminal 2: graft a branch on (leave running)
+graft init                             # terminal 3: pick "Orchard tree", point at the trunk
+graft tree status                      # sanity-check
+graft run                              # graft leaves onto the branches
 ```
 
 The service-account **token is stored in the Keychain** (keyed by account name, same
-mechanism as the GitHub App PEM), so it never lands in profile JSON. `graft run`
-resolves it at start: an inline `orchard.token` wins if present, otherwise the Keychain,
-otherwise empty (fine for the unsecured dev controller). For a *remote* secured
-controller, `graft orchard init` creates the service account for you when you hold an
-admin `orchard` context — otherwise it falls back to pasting an existing token.
+mechanism as the GitHub App PEM), so it never lands in profile JSON. `graft run` resolves
+it at start: an inline `orchard.token` wins if present, otherwise the Keychain, otherwise
+empty (fine for an unsecured local trunk). For a *remote* secured controller, `graft init`
+creates the service account for you when you hold an admin `orchard` context — otherwise
+it falls back to pasting an existing token.
 
 ---
 
@@ -133,8 +139,7 @@ find and delete its own VMs without touching anything else on the cluster.
 
 ## Setup
 
-For a single-machine smoke test, skip all of this: **`graft orchard dev`** then
-**`graft orchard init --local`** (see [Driving Orchard from graft](#driving-orchard-from-graft))
+For a single-machine smoke test, skip all of this: **`graft tree plant`** + **`graft tree branch http://localhost:6120`** then **`graft init`** (see [Driving Orchard from graft](#driving-orchard-from-graft))
 gives you a local fleet with zero hand-editing. For a real fleet:
 
 ### 1. Stand up the controller
@@ -146,7 +151,7 @@ state). Add TLS + auth per the
 ### 2. Two service accounts
 A fleet uses two, with different roles:
 
-- **graft** — to create/exec/delete VMs. `graft orchard init` creates this one and
+- **graft** — to create/exec/delete VMs. `graft init` creates this one and
   stores its token in the Keychain for you (when you hold an admin `orchard` context);
   the manual equivalent is:
   ```sh
@@ -176,7 +181,7 @@ pure muscle. Add or remove workers anytime; the controller absorbs the change on
 next acquire (see [How the fleet works](#how-the-fleet-works)).
 
 ### 4. Point graft at the controller
-`graft orchard init` writes this block (and stores the token in the Keychain) for you;
+`graft init` writes this block (and stores the token in the Keychain) for you;
 here's what it produces — note there's **no `token` field**, it's Keychain-backed:
 ```json
 {
@@ -221,7 +226,7 @@ the excess VMs as `pending`; graft waits up to ~10 min for each, then times out,
 deletes it, and retries. It works — VMs land as workers free up — but **churns** when
 chronically over-subscribed. Live capacity (above) avoids this in the common case;
 size `count` / `maxVMs` to roughly your real fleet capacity (~2 macOS VMs per worker)
-to be safe. `graft orchard status` / `workers` show the live free-slot count.
+to be safe. `graft tree status` / `branches` show the live free-slot count.
 
 > **The 2-macOS escape hatch.** Orchard can schedule a macOS image as an `os: linux`
 > VM to dodge the 2-macOS-VM/host cap (the guest still runs macOS; only the

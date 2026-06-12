@@ -137,8 +137,8 @@ steps, and security trade-offs.
 ## Commands
 
 ```
-graft init                              Interactive setup: profile + pools + key import
-graft doctor                            Verify GitHub App auth end-to-end (no VM boot)
+graft init                              Interactive setup: backend (Tart | Orchard tree) + profile + pools + keys
+graft arborist                          Tree-doctor: verify GitHub App auth end-to-end (no VM boot)
 graft run [--profile NAME] [--daemon] [--verbose]   Start the supervisor (live spinner; -v for full logs)
 graft status                            Show supervisor + runner state
 graft stop                              Gracefully stop a running supervisor
@@ -159,14 +159,15 @@ graft image list / rm / prune / push / pull / template   Manage images (prune cl
 graft dev [<repo>|<box>|.] [--code]     Dev box: clone a repo / resume a box / mount '.' (docs/dev-boxes.md)
 graft dev ls / rm [box]                 List / remove dev boxes
 
-graft orchard dev                       Run a local Orchard controller + worker (foreground)
-graft orchard init [--local]            Point a profile at an Orchard controller (token → Keychain)
-graft orchard status / workers / vms    Inspect the multi-host fleet (free slots, workers, VMs)
+graft tree plant                        Plant the trunk — run the controller (foreground)
+graft tree branch <trunk-url>           Graft a branch on — run a worker that joins the tree
+graft tree prune <name>                 Prune a branch — remove a worker
+graft tree status / branches / leaves   Inspect the tree (capacity, workers, VMs)
 
-graft vm create <image> [--os macos|linux]   Clone + boot a VM, print name<TAB>ip
-graft vm delete <name>                  Stop + destroy a VM
-graft vm list [--all]                   List graft-managed (or all) VMs
-graft vm ip <name> [--wait]             Print a VM's IP
+graft leaf create <image> [--os macos|linux]   Clone + boot a VM (leaf), print name<TAB>ip
+graft leaf rm <name>                    Stop + destroy a leaf (VM)
+graft leaf list [--all]                 List graft-managed (or all) leaves
+graft leaf ip <name> [--wait]           Print a leaf's IP
 graft runners list [--profile NAME]     List graft's runner registrations on GitHub
 graft runners prune [--profile NAME]    Delete offline graft runner husks on GitHub
 graft secrets import --app-id N --pem P [--system]
