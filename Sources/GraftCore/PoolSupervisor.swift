@@ -20,6 +20,7 @@ extension RunnerProvisioner: RunnerRunner {}
 /// so a live UI (the `graft run` spinner dashboard) can show per-slot progress.
 public enum RunnerPhase: Sendable {
     case acquiring          // cloning + booting the VM
+    case waitingForCapacity // fleet has no room right now — parked, not churning a doomed acquire
     case provisioning       // VM booted; registering the JIT runner with GitHub
     case starting           // runner process launched, configuring inside the guest
     case connected          // connected to GitHub; configuring before it listens
@@ -33,6 +34,7 @@ public enum RunnerPhase: Sendable {
     public var label: String {
         switch self {
         case .acquiring: return "booting VM"
+        case .waitingForCapacity: return "waiting for capacity"
         case .provisioning: return "registering runner"
         case .starting: return "starting up"
         case .connected: return "connected · preparing"
@@ -49,6 +51,7 @@ public enum RunnerPhase: Sendable {
     public var kind: String {
         switch self {
         case .acquiring: return "acquiring"
+        case .waitingForCapacity: return "waiting"
         case .provisioning: return "provisioning"
         case .starting: return "starting"
         case .connected: return "connected"
@@ -176,6 +179,15 @@ public actor PoolSupervisor {
 
         while !Task.isCancelled {
             do {
+                // Park until the fleet has room. Firing `acquire` into a 0-capacity fleet
+                // (e.g. every Orchard worker gone) just churns create→pending→timeout→delete;
+                // instead wait and resume when capacity returns. Local Tart's capacity is its
+                // fixed host ceiling (never 0), so only an Orchard fleet actually parks here.
+                while !Task.isCancelled, await provider.capacity(for: pool.os) <= 0 {
+                    report(.waitingForCapacity)
+                    try await Task.sleep(for: .seconds(15))
+                }
+                if Task.isCancelled { break }
                 report(.acquiring)
                 let vm = try await provider.acquire(image: pool.image, os: pool.os, mounts: pool.mounts ?? [], network: pool.network ?? .nat, resources: pool.resources)
                 track(vm, pool: pool.name)

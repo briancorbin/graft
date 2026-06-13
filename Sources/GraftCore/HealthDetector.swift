@@ -143,15 +143,19 @@ public struct CapacityDetector: HealthDetector {
         var events: [HealthEvent] = []
         for (os, desired) in desiredByOS where desired > 0 {
             let cap = await capacity(os)
-            if cap < desired {
-                events.append(HealthEvent(
-                    severity: .warn, category: .capacity, checkID: "capacity-shortfall",
-                    subject: os.rawValue,
-                    message: "want \(desired) \(os.rawValue) runner(s) but capacity is \(cap) — \(desired - cap) will stay unfilled",
-                    detail: ["os": os.rawValue, "desired": String(desired), "capacity": String(cap)],
-                    suggestedAction: "lower the pool count, add hosts/workers, or raise the backend ceiling"
-                ))
-            }
+            guard cap < desired else { continue }
+            // Zero capacity for a wanted pool = total outage (it can run nothing) → critical;
+            // a partial shortfall is degraded-but-running → warn.
+            let severity: HealthEvent.Severity = cap == 0 ? .critical : .warn
+            let message = cap == 0
+                ? "want \(desired) \(os.rawValue) runner(s) but the fleet has 0 capacity — parked, no jobs can run"
+                : "want \(desired) \(os.rawValue) runner(s) but capacity is \(cap) — \(desired - cap) will stay unfilled"
+            events.append(HealthEvent(
+                severity: severity, category: .capacity, checkID: "capacity-shortfall",
+                subject: os.rawValue, message: message,
+                detail: ["os": os.rawValue, "desired": String(desired), "capacity": String(cap)],
+                suggestedAction: "add workers/hosts, lower the pool count, or raise the backend ceiling"
+            ))
         }
         if let fleet, let snapshot = await fleet() {
             for worker in snapshot.pausedWorkers {

@@ -96,6 +96,18 @@ struct HealthDetectorTests {
         #expect(await detector.probe().isEmpty)
     }
 
+    @Test("CapacityDetector: partial shortfall warns, zero capacity is critical")
+    func capacitySeverity() async {
+        let partial = CapacityDetector(desiredByOS: [.macOS: 2], capacity: { _ in 1 })
+        #expect(await partial.probe().first?.severity == .warn)
+
+        let outage = CapacityDetector(desiredByOS: [.macOS: 2], capacity: { _ in 0 })
+        let events = await outage.probe()
+        #expect(events.count == 1)
+        #expect(events.first?.severity == .critical)
+        #expect(events.first?.checkID == "capacity-shortfall")
+    }
+
     @Test("ControllerReachabilityDetector fires critical only when the controller is down")
     func controllerReachability() async {
         let up = ControllerReachabilityDetector(controllerURL: "http://c:6120", reachable: { true })
