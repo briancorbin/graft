@@ -47,6 +47,24 @@ struct HealthDetectorTests {
         #expect(events.first?.detail["runnerId"] == "2")
     }
 
+    @Test("RunnerDetector skips runners the supervisor currently owns (no false husk)")
+    func runnerOwnedExcluded() async throws {
+        let target = try GitHubTarget(parsing: "org:acme")
+        let detector = RunnerDetector(
+            scopes: [.init(label: "org:acme", target: target)],
+            namePrefix: "graft-",
+            owned: { ["graft-live"] }            // the supervisor's live runner
+        ) { _ in
+            [
+                .init(id: 1, name: "graft-live", status: "offline"),   // owned + briefly offline → skip
+                .init(id: 2, name: "graft-husk", status: "offline"),   // not owned → genuine husk
+            ]
+        }
+        let events = await detector.probe()
+        #expect(events.count == 1)
+        #expect(events.first?.subject == "graft-husk")
+    }
+
     @Test("RunnerDetector stays quiet when listing fails (auth owns that)")
     func runnerListFailure() async throws {
         struct Boom: Error {}

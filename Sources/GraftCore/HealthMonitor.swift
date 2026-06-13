@@ -124,6 +124,12 @@ public enum HealthMonitorFactory {
             return try await client.listRunners(target: target)
         }
 
+        // The supervisor's currently-owned runners (tracked VM names == runner names), so
+        // RunnerDetector never flags a live runner that's briefly offline right after it
+        // registers. Empty off-trunk (no local state) — nothing owned, nothing to skip.
+        let state = StateManager()
+        let ownedRunners: @Sendable () -> Set<String> = { Set((state.load()?.runners ?? []).map(\.vm.name)) }
+
         var desiredByOS: [GuestOS: Int] = [:]
         for pool in config.pools { desiredByOS[pool.os, default: 0] += pool.count }
         let capacity: @Sendable (GuestOS) async -> Int = { os in await provider.capacity(for: os) }
@@ -150,14 +156,13 @@ public enum HealthMonitorFactory {
         // Network/controller-backed detectors work from anywhere with creds.
         var detectors: [any HealthDetector] = [
             AuthDetector(probes: authProbes),
-            RunnerDetector(scopes: runnerScopes, list: runnerList),
+            RunnerDetector(scopes: runnerScopes, owned: ownedRunners, list: runnerList),
             CapacityDetector(desiredByOS: desiredByOS, capacity: capacity, fleet: fleet),
         ]
         if let controllerDetector { detectors.append(controllerDetector) }
 
         // State-backed detectors — only meaningful on the trunk host.
         if isTrunk {
-            let state = StateManager()
             let transientPhases: Set<String> = [
                 "acquiring", "provisioning", "starting", "connected", "deregistering", "stopping", "retrying",
             ]

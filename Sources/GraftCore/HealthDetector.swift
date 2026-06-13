@@ -63,26 +63,35 @@ public struct RunnerDetector: HealthDetector {
 
     let scopes: [Scope]
     let namePrefix: String
+    /// Runner names the supervisor currently owns (its tracked VM names == runner names).
+    /// A just-registered JIT runner is briefly `offline` on GitHub before it connects, so
+    /// without this the monitor flags its *own* live runners as husks. `track()` records the
+    /// VM before the runner is registered, so excluding this set is race-free. Empty off-trunk.
+    let owned: @Sendable () -> Set<String>
     let list: @Sendable (GitHubTarget) async throws -> [GitHubAppClient.Runner]
     public var name: String { "runner" }
 
     public init(
         scopes: [Scope],
         namePrefix: String = LocalTartProvider.namePrefix,
+        owned: @escaping @Sendable () -> Set<String> = { [] },
         list: @escaping @Sendable (GitHubTarget) async throws -> [GitHubAppClient.Runner]
     ) {
         self.scopes = scopes
         self.namePrefix = namePrefix
+        self.owned = owned
         self.list = list
     }
 
     public func probe() async -> [HealthEvent] {
+        let mine = owned()
         var events: [HealthEvent] = []
         for scope in scopes {
             // A failed listing is an auth/connectivity problem that AuthDetector owns —
             // don't double-report it here.
             guard let runners = try? await list(scope.target) else { continue }
-            for runner in runners where runner.isOffline && runner.name.hasPrefix(namePrefix) {
+            for runner in runners
+            where runner.isOffline && runner.name.hasPrefix(namePrefix) && !mine.contains(runner.name) {
                 events.append(HealthEvent(
                     severity: .warn, category: .runner, checkID: "offline-runner",
                     subject: runner.name,
