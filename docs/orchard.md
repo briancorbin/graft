@@ -7,8 +7,8 @@ holds desired state and a fleet of **workers** (Apple Silicon Macs running `tart
 that actually boot the VMs.
 
 graft's `OrchardProvider` is a drop-in swap for the local Tart backend — same pool
-config, same ephemeral runner loop, same `.graft` images. The only change is
-`provider: "orchard"` plus an `orchard` block. graft asks the controller to create a
+config, same ephemeral runner loop, same `.graft` images. The only change is a
+`provider` of `{ "type": "orchard", … }`. graft asks the controller to create a
 VM; the controller picks a worker with free capacity (and enforces the per-host
 2-macOS limit for you); graft runs the runner over Orchard's SSH tunnel and deletes
 the VM when the job's done. (Verified end-to-end — see the bottom of this doc.)
@@ -95,7 +95,7 @@ graft run                              # graft leaves onto the branches
 
 The service-account **token is stored in the Keychain** (keyed by account name, same
 mechanism as the GitHub App PEM), so it never lands in profile JSON. `graft run` resolves
-it at start: an inline `orchard.token` wins if present, otherwise the Keychain, otherwise
+it at start: an inline provider `token` wins if present, otherwise the Keychain, otherwise
 empty (fine for an unsecured local trunk). For a *remote* secured controller, `graft init`
 creates the service account for you when you hold an admin `orchard` context — otherwise
 it falls back to pasting an existing token.
@@ -117,9 +117,9 @@ runs `orchard context create` or touches `~/.config/orchard`:
 
 | Env var | From config |
 |---|---|
-| `ORCHARD_URL` | `orchard.controllerURL` |
-| `ORCHARD_SERVICE_ACCOUNT_NAME` | `orchard.serviceAccount` |
-| `ORCHARD_SERVICE_ACCOUNT_TOKEN` | `orchard.token` |
+| `ORCHARD_URL` | `provider.controllerURL` |
+| `ORCHARD_SERVICE_ACCOUNT_NAME` | `provider.serviceAccount` |
+| `ORCHARD_SERVICE_ACCOUNT_TOKEN` | `provider.token` |
 
 Each `VMProvider` method maps to one `orchard` subcommand:
 
@@ -185,19 +185,20 @@ next acquire (see [How the fleet works](#how-the-fleet-works)).
 here's what it produces — note there's **no `token` field**, it's Keychain-backed:
 ```json
 {
-  "provider": "orchard",
-  "orchard": {
+  "provider": {
+    "type": "orchard",
     "controllerURL": "https://orchard.example.com:6120",
     "serviceAccount": "graft",
     "maxVMs": 8
   },
+  "github": { "appId": 12345, "target": "org:my-org" },
   "pools": [
     {
       "name": "macos-ci",
       "image": "ghcr.io/cirruslabs/macos-tahoe-xcode:latest",
       "os": "macos",
       "count": 6,
-      "github": { "appId": 12345, "target": "org:my-org", "runnerGroupId": 1 }
+      "labels": ["self-hosted", "macos", "ci"]
     }
   ],
   "secrets": { "store": "keychain", "scope": "login" }

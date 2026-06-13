@@ -99,28 +99,30 @@ graft config validate
 
 ```json
 {
-  "provider": "tart",
+  "provider": { "type": "tart" },
+  "github": { "appId": 12345, "target": "org:my-org" },
   "pools": [
     {
       "name": "macos-release",
       "image": "ghcr.io/cirruslabs/macos-tahoe-xcode:latest",
       "os": "macos",
       "count": 2,
-      "github": {
-        "appId": 12345,
-        "target": "org:my-org",
-        "runnerGroupId": 1,
-        "labels": ["self-hosted", "macos", "graft"]
-      }
+      "labels": ["self-hosted", "macos", "release"],
+      "cpu": 4,
+      "memory": 8192
     }
   ],
   "secrets": { "store": "keychain", "scope": "login" }
 }
 ```
 
-`labels` are baked into the JIT config at generation time (immutable per runner);
-omit to default to `["self-hosted", <os>, <pool-name>]`. `runnerGroupId` defaults
-to `1`.
+The `provider` object owns the backend (`{ "type": "tart" }`, or
+`{ "type": "orchard", "controllerURL": …, "serviceAccount": …, "maxVMs": … }`).
+**`github`** (the App + where runners register) is declared once at the profile level
+and inherited by every pool — a pool may override it with its own `github` for a
+multi-repo profile. A **pool** is just its workload: `image`, `count`, `os`, `labels`
+(its tags — `runs-on:` targets these; default `["self-hosted", <os>, <name>]`), and
+optional `cpu`/`memory` per leaf. `runnerGroupId` defaults to `1`.
 
 ### 4. Run
 

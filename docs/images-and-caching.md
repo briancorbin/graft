@@ -188,7 +188,7 @@ When a cache moves faster than your rebuild cadence, mount it from the host inst
 baking it. Pools take a `mounts` list; `graft pool add` takes `--mount`:
 
 ```sh
-graft pool add --name mac --image rn-detox --app-id 123 --target repo:org/app \
+graft pool add --name mac --image rn-detox \
   --mount pods:/opt/graft-cache/pods:ro \
   --mount npm:/opt/graft-cache/npm:ro
 ```
