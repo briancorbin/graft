@@ -178,7 +178,7 @@ extension ProviderConfig: Codable {
     }
 }
 
-/// Health-monitoring settings for `graft arborist --watch`. Absent → built-in defaults
+/// Health-monitoring settings for `graft arborist --tend`. Absent → built-in defaults
 /// (observe-only, no webhooks). Detection-first: nothing here remediates — these tune
 /// what the monitor *watches* and where it *reports*, never what it would change.
 public struct MonitorConfig: Codable, Sendable, Equatable {
@@ -247,7 +247,7 @@ public struct GraftConfig: Codable, Sendable {
     public var github: GitHubConfig?
     public var pools: [PoolConfig]
     public var secrets: SecretsConfig?
-    /// Health-monitoring settings for `graft arborist --watch`. Absent → defaults
+    /// Health-monitoring settings for `graft arborist --tend`. Absent → defaults
     /// (observe-only, no webhooks). Optional, so existing configs load unchanged.
     public var monitor: MonitorConfig?
 

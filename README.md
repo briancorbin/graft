@@ -45,7 +45,7 @@ multi-host fleets and a shared dev/CI image.
 | Pool supervisor + state + daemon | ✅ built & unit-tested |
 | Image builder + `graft dev` + `.graft` recipes | ✅ built & tested (real image baked end-to-end) |
 | Orchard multi-host backend | ✅ verified end-to-end against a live controller — [docs/orchard.md](docs/orchard.md) |
-| Health monitor (`arborist --watch`) | ✅ built & unit-tested — detection-only, [docs/health-and-monitoring.md](docs/health-and-monitoring.md) |
+| Health monitor (`arborist --tend`) | ✅ built & unit-tested — detection-only, [docs/health-and-monitoring.md](docs/health-and-monitoring.md) |
 
 Built and driven through end-to-end; the parts that need real GitHub credentials or
 a booted VM to fully prove are flagged in code (`TODO(real-VM)`).
@@ -258,7 +258,7 @@ passwords. Stock cirruslabs images ship the agent; custom images must include it
 - **[docs/dev-boxes.md](docs/dev-boxes.md)** — `graft dev`: clone vs mount, persistence, `--code`, the picker
 - **[docs/images-and-caching.md](docs/images-and-caching.md)** — `.graft` recipes, the full field reference, CoW caching
 - **[docs/orchard.md](docs/orchard.md)** — the multi-host Orchard backend: controller/workers, service account, config
-- **[docs/health-and-monitoring.md](docs/health-and-monitoring.md)** — `arborist --watch`: detectors, event schema, webhooks, the self-healing seam
+- **[docs/health-and-monitoring.md](docs/health-and-monitoring.md)** — `arborist --tend`: detectors, event schema, webhooks, the self-healing seam
 - **[docs/ec2-mac-setup.md](docs/ec2-mac-setup.md)** — headless / EC2 Mac runners (auto-login, bridged networking)
 - **[editors/vscode/](editors/vscode/)** — the `.graft` VS Code extension
 

@@ -13,7 +13,7 @@ import Foundation
 ///
 /// A remediator reads `HealthEvent.suggestedAction` for the hint and dispatches on
 /// `category` + `checkID`. It should run only behind an explicit opt-in
-/// (e.g. a future `graft arborist --watch --heal`), never by default.
+/// (e.g. a future `graft arborist --tend --heal`), never by default.
 public protocol Remediator: Sendable {
     /// Decide and perform a remediation for one finding, returning what it did so the
     /// monitor can log/emit it. Today: unused — no conformers ship yet.

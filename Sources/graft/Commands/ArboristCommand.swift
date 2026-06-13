@@ -41,13 +41,13 @@ struct Arborist: AsyncParsableCommand {
     var noProbe = false
 
     @Flag(help: "Tend continuously: run the full health-monitor loop (detection-only) until stopped.")
-    var watch = false
+    var tend = false
 
-    @Option(name: .long, help: "With --watch, seconds between sweeps (default: config `monitor.intervalSeconds`, else 60).")
+    @Option(name: .long, help: "With --tend, seconds between sweeps (default: config `monitor.intervalSeconds`, else 60).")
     var interval: Int?
 
     func run() async throws {
-        if watch { try await runWatch(); return }
+        if tend { try await runTend(); return }
 
         let targets: [GitHubConfig]
         let scope: KeychainScope
@@ -123,13 +123,13 @@ struct Arborist: AsyncParsableCommand {
         print("\nall checks passed ✓  — GitHub App auth is wired correctly")
     }
 
-    // MARK: Continuous tending (--watch)
+    // MARK: Continuous tending (--tend)
 
     /// Run the detection-first health monitor against the active profile until stopped.
     /// Reuses the same auth/runner/capacity/slot/deadwood probes the one-shot doctor and
     /// supervisor already have — it just runs them on a cadence and reports. It does NOT
     /// remediate anything.
-    private func runWatch() async throws {
+    private func runTend() async throws {
         let path = GraftConfig.resolvePath(explicit: config, profile: profile)
         let cfg = try GraftConfig.load(from: path)
         guard !cfg.pools.isEmpty else {

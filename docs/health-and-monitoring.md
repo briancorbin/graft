@@ -1,18 +1,18 @@
 # Health & monitoring
 
-`graft arborist --watch` is graft's **self-monitoring loop** — a continuous tending pass
+`graft arborist --tend` is graft's **self-monitoring loop** — a continuous tending pass
 that watches a running fleet and reports what's wrong. It is **detection-first**: it
 observes, classifies, and ships findings to wherever you want them. It does **not**
 remediate anything (yet) — see [the self-healing seam](#the-self-healing-seam).
 
 The one-shot `graft arborist` verifies the GitHub App auth chain once and exits.
-`--watch` keeps the doctor in the room: it runs the auth check *plus* four more detectors
+`--tend` keeps the doctor in the room: it runs the auth check *plus* four more detectors
 on a cadence, forever.
 
 ```sh
-graft arborist --watch                 # tend the active profile, default 60s sweeps
-graft arborist --watch --interval 30   # faster cadence
-graft arborist --watch --profile work  # a specific profile
+graft arborist --tend                 # tend the active profile, default 60s sweeps
+graft arborist --tend --interval 30   # faster cadence
+graft arborist --tend --profile work  # a specific profile
 ```
 
 It runs against the active profile's pools. Stop it with Ctrl-C.
@@ -157,6 +157,6 @@ Remediation is the *next* layer, deliberately not built yet — you trust detect
 wild first, then flip on healers one at a time. The seam is published:
 [`Remediator`](../Sources/GraftCore/Remediator.swift) is a protocol that consumes the same
 `HealthEvent` stream the sinks already carry, reads `suggestedAction`, and dispatches on
-`category` + `checkID`. When it lands it will be opt-in (a future `--watch --heal`),
+`category` + `checkID`. When it lands it will be opt-in (a future `--tend --heal`),
 guarded by backoff + a circuit breaker so it absorbs failures instead of amplifying them —
 never on by default.
