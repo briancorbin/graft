@@ -7,7 +7,7 @@ struct Graft: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "graft",
         abstract: "Ephemeral GitHub Actions runners on Tart VMs.",
-        version: "0.2.0",
+        version: "0.3.0",
         subcommands: [
             Init.self, Run.self, Status.self, Stop.self, Arborist.self,
             Profile.self, Pool.self, Leaf.self, ConfigCommand.self, Secrets.self,

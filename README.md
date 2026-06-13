@@ -149,7 +149,7 @@ graft profile use <name>                Set the active profile
 graft profile show [name]               Print a profile's config
 graft profile rm <name>                 Delete a profile
 graft pool new [--profile NAME]         Interactive wizard: add a pool (image picked from the machine)
-graft pool add --name N --image I --app-id A --target T [--os] [--count] [--labels]
+graft pool add --name N --image I --app-id A --target T [--os] [--count] [--labels] [--cpu] [--memory]
 graft pool rm <name> [--profile NAME]
 graft pool list [--profile NAME]
 
@@ -160,7 +160,7 @@ graft dev [<repo>|<box>|.] [--code]     Dev box: clone a repo / resume a box / m
 graft dev ls / rm [box]                 List / remove dev boxes
 
 graft tree plant                        Plant the trunk — run the controller (foreground)
-graft tree branch <trunk-url>           Graft a branch on — run a worker that joins the tree
+graft tree branch <trunk-url> [--reserve N]   Graft a branch on — run a worker that joins the tree
 graft tree prune <name>                 Prune a branch — remove a worker
 graft tree status / branches / leaves   Inspect the tree (capacity, workers, VMs)
 
