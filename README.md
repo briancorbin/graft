@@ -45,7 +45,7 @@ multi-host fleets and a shared dev/CI image.
 | Pool supervisor + state + daemon | ✅ built & unit-tested |
 | Image builder + `graft dev` + `.graft` recipes | ✅ built & tested (real image baked end-to-end) |
 | Orchard multi-host backend | ✅ verified end-to-end against a live controller — [docs/orchard.md](docs/orchard.md) |
-| Health monitor (`arborist --tend`) | ✅ built & unit-tested — detection-only, [docs/health-and-monitoring.md](docs/health-and-monitoring.md) |
+| Health monitor (`--tend` on run / tree branch / tree plant) | ✅ built & unit-tested — detection-only, per-role agents, [docs/health-and-monitoring.md](docs/health-and-monitoring.md) |
 
 Built and driven through end-to-end; the parts that need real GitHub credentials or
 a booted VM to fully prove are flagged in code (`TODO(real-VM)`).

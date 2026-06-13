@@ -34,10 +34,23 @@ with no key and no supervisor state. The monitor watches the controller + worker
   **observer mode** — auth + runner + capacity only — so the state-backed checks can't
   false-fire on an empty local state.
 
-For an Orchard fleet, one trunk monitor watches the whole tree *through the controller*
-(fleet capacity, paused workers, cluster-wide orphan VMs). The **worker Macs run no graft**,
-so their host-level vitals (disk, memory, `tart` health) aren't visible to the trunk — a
-per-worker agent that emits the same events is future work.
+### Each role tends itself
+
+A full Orchard fleet runs three long-running graft processes, and **each has its own
+`--tend`** — same event schema and sinks, but detectors matched to what that host can
+actually see:
+
+| Process | Vantage | `--tend` detectors |
+|---|---|---|
+| `graft run` | supervisor / demand | auth · runner · capacity · wedged-slot · deadwood |
+| `graft tree branch` | worker host | disk · memory · `tart` health |
+| `graft tree plant` | controller host | disk · memory · controller-responding |
+
+The supervisor sees a worker is *paused* (the symptom) through the controller API; the
+branch agent, running *on* that Mac, sees *why* — its disk is full — ideally first. The
+worker and controller agents carry **no GitHub creds** (host probes only), so the "worker
+holds no secret" property is preserved. All three emit the same `HealthEvent` to the same
+JSONL/webhook → one dashboard. (For local Tart there's just the one process, `graft run --tend`.)
 
 ## What it watches
 
@@ -52,6 +65,7 @@ about them.
 | `capacity` | drought | configured count exceeds host capacity; a fleet worker is **paused** | `provider.capacity`, Orchard `report()` |
 | `leaf` | wilt | a slot **wedged** in a transient phase (booting/provisioning/…) past a timeout | persisted slot phases |
 | `supervisor` | deadwood | a graft VM the backend still has that **no slot owns** (a leak) | `provider.managedVMNames()` |
+| `host` | soil | low disk · memory pressure · `tart`/controller unhealthy (branch/trunk agents) | FileManager, Mach, `tart list` |
 
 ### Severity
 

@@ -165,6 +165,39 @@ public enum HealthMonitorFactory {
         return detectors
     }
 
+    /// Host-vitals detectors for a **branch** (worker) Mac — what only the worker can see.
+    /// No GitHub creds, no supervisor state: pure host probes (disk, memory, `tart` health),
+    /// so a worker that "holds no secret" stays that way.
+    public static func branchDetectors(name: String) -> [any HealthDetector] {
+        [
+            DiskDetector(subject: name),
+            MemoryDetector(subject: name),
+            CommandHealthDetector(
+                checkID: "tart-unhealthy", subject: name,
+                message: "`tart list` failed — Virtualization.framework/Tart may be wedged; this branch can't boot leaves",
+                action: "check tart and that a GUI login session is active (VF won't boot a VM without one)",
+                isHealthy: { ((try? await Shell.run("tart", ["list"], timeout: .seconds(10)))?.succeeded) ?? false }),
+        ]
+    }
+
+    /// Host-vitals detectors for the **trunk** (controller) Mac. Disk + memory + a
+    /// caller-supplied "is the controller responding?" probe (the command owns the orchard
+    /// creds, so it injects that check).
+    public static func controllerDetectors(
+        name: String,
+        responding: @escaping @Sendable () async -> Bool
+    ) -> [any HealthDetector] {
+        [
+            DiskDetector(subject: name),
+            MemoryDetector(subject: name),
+            CommandHealthDetector(
+                checkID: "controller-unresponsive", subject: name,
+                message: "the controller isn't answering API calls — the trunk may be wedged",
+                action: "check the orchard controller process and its data dir",
+                isHealthy: responding),
+        ]
+    }
+
     /// The standard sinks: human log + JSONL + snapshot, plus a webhook sink when the
     /// profile configures any. JSONL + snapshot are always on (cheap, local, the GUI
     /// reads them).

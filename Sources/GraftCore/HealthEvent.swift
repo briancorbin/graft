@@ -32,6 +32,7 @@ public struct HealthEvent: Codable, Sendable, Equatable, Identifiable {
         case capacity     // host & fleet capacity / paused workers   (docs: "drought")
         case leaf         // VM liveness / wedged guests              (docs: "wilt")
         case supervisor   // slot stuck / orphans / desired-vs-actual (docs: "deadwood")
+        case host         // worker/controller host vitals: disk, memory, tart/controller health (docs: "soil")
     }
 
     public let timestamp: Date

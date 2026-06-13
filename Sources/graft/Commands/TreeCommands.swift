@@ -75,6 +75,22 @@ extension Tree {
         }
         return OrchardProvider(config: orchard)
     }
+
+    /// Start a detection-only host-vitals monitor alongside a long-running tree process (a
+    /// branch worker or the trunk controller). Sink/webhook config comes from the active
+    /// profile when there is one, else defaults. Returns the task so the caller cancels it
+    /// when the orchard process exits.
+    static func startHostMonitor(_ detectors: [any HealthDetector], profile: String? = nil) -> Task<Void, Never> {
+        let mon = ((try? resolveProfileName(profile)).flatMap { try? Profiles.load($0) })?.monitor ?? MonitorConfig()
+        let reporter = HealthReporter(sinks: HealthMonitorFactory.sinks(monitor: mon))
+        let heartbeat = mon.heartbeatSeconds
+        let monitor = HealthMonitor(
+            detectors: detectors, reporter: reporter,
+            interval: .seconds(mon.intervalSeconds),
+            heartbeatSeconds: heartbeat > 0 ? TimeInterval(heartbeat) : nil)
+        printErr(ANSI.dim("    tending: \(detectors.count) host detectors, \(mon.webhooks.count) webhook(s) — detection-only"))
+        return Task { await monitor.run() }
+    }
 }
 
 // MARK: - graft tree status / branches / leaves
@@ -165,9 +181,22 @@ extension Tree {
         @Flag(name: .long, help: "Bonsai: a tiny local tree — trunk + one branch on this machine (for testing).")
         var bonsai = false
 
+        @Flag(name: .long, help: "Also tend this trunk: host-vitals + controller-responding monitoring (detection-only).")
+        var tend = false
+
         func run() async throws {
             try await Tree.requireOrchard()
             try? FileManager.default.createDirectory(atPath: dataDir, withIntermediateDirectories: true)
+
+            // Optional controller-host monitor: disk/memory + is the controller answering?
+            let monitorTask: Task<Void, Never>? = tend ? Tree.startHostMonitor(
+                HealthMonitorFactory.controllerDetectors(name: ProcessInfo.processInfo.hostName, responding: {
+                    // Token is captured a beat after the controller starts — treat "not yet" as healthy.
+                    guard let env = try? Tree.adminEnv(url: "http://127.0.0.1:6120") else { return true }
+                    return ((try? await Shell.run("orchard", ["list", "workers"], environment: env, timeout: .seconds(10)))?.succeeded) ?? false
+                })) : nil
+            defer { monitorTask?.cancel() }
+
             if bonsai { try await plantBonsai(); return }
 
             printErr(ANSI.green("🕳  digging a hole…"))
@@ -251,6 +280,9 @@ extension Tree {
         @Option(name: .long, help: "Reserve N GB of host RAM: advertise (total − N) to the scheduler so leaves can't OOM the host.")
         var reserve: Int?
 
+        @Flag(name: .long, help: "Also tend this branch: host-vitals monitoring (disk/memory/tart, detection-only).")
+        var tend = false
+
         func run() async throws {
             try await Tree.requireOrchard()
             printErr(ANSI.green("🌿  grafting a branch onto \(url)…"))
@@ -271,6 +303,11 @@ extension Tree {
                 args += ["--resources", "org.cirruslabs.logical-cores=\(ProcessInfo.processInfo.activeProcessorCount)"]
                 printErr(ANSI.dim("    advertising \(mib) MB (reserving \(reserve) GB for the host)"))
             }
+            let monitorTask: Task<Void, Never>? = tend
+                ? Tree.startHostMonitor(HealthMonitorFactory.branchDetectors(name: name ?? ProcessInfo.processInfo.hostName))
+                : nil
+            defer { monitorTask?.cancel() }
+
             printErr(ANSI.dim("    branch live — Ctrl-C to drop it.\n"))
             let code = try await Shell.runStreaming("orchard", args, onLine: { line in
                 FileHandle.standardError.write(Data((line + "\n").utf8))
