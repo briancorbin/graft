@@ -78,6 +78,10 @@ public struct LocalTartProvider: VMProvider {
         try await Tart.list().filter { $0.name.hasPrefix(Self.namePrefix) }
     }
 
+    public func managedVMNames() async -> [String] {
+        ((try? await graftManagedVMs()) ?? []).map(\.name)
+    }
+
     /// Stop + delete any graft-managed VM still on this host (by name prefix).
     public func sweepOrphans() async {
         for vm in (try? await graftManagedVMs()) ?? [] {

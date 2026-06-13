@@ -1,4 +1,5 @@
 import ArgumentParser
+import Dispatch
 import Foundation
 import GraftCore
 
@@ -39,7 +40,15 @@ struct Arborist: AsyncParsableCommand {
     @Flag(help: "Stop after minting a token — don't create/delete a probe runner.")
     var noProbe = false
 
+    @Flag(help: "Tend continuously: run the full health-monitor loop (detection-only) until stopped.")
+    var watch = false
+
+    @Option(name: .long, help: "With --watch, seconds between sweeps (default: config `monitor.intervalSeconds`, else 60).")
+    var interval: Int?
+
     func run() async throws {
+        if watch { try await runWatch(); return }
+
         let targets: [GitHubConfig]
         let scope: KeychainScope
 
@@ -112,6 +121,59 @@ struct Arborist: AsyncParsableCommand {
 
         if failed { throw ExitCode.failure }
         print("\nall checks passed ✓  — GitHub App auth is wired correctly")
+    }
+
+    // MARK: Continuous tending (--watch)
+
+    /// Run the detection-first health monitor against the active profile until stopped.
+    /// Reuses the same auth/runner/capacity/slot/deadwood probes the one-shot doctor and
+    /// supervisor already have — it just runs them on a cadence and reports. It does NOT
+    /// remediate anything.
+    private func runWatch() async throws {
+        let path = GraftConfig.resolvePath(explicit: config, profile: profile)
+        let cfg = try GraftConfig.load(from: path)
+        guard !cfg.pools.isEmpty else {
+            throw GraftError("no pools in the active profile — run `graft init` first (or use the one-shot `graft arborist`)")
+        }
+
+        let scope = system ? .system : (KeychainScope(rawValue: cfg.secrets?.scope ?? "login") ?? .login)
+        let secrets = KeychainSecretStore(scope: scope)
+        let provider = try Run.makeProvider(cfg)
+
+        let intervalSeconds = interval ?? cfg.monitor?.intervalSeconds ?? 60
+        let heartbeatConfig = cfg.monitor?.heartbeatSeconds ?? 300
+        let heartbeat: TimeInterval? = heartbeatConfig > 0 ? TimeInterval(heartbeatConfig) : nil
+
+        let detectors = HealthMonitorFactory.detectors(config: cfg, provider: provider, secrets: secrets)
+        let reporter = HealthReporter(sinks: HealthMonitorFactory.sinks(monitor: cfg.monitor))
+        let monitor = HealthMonitor(
+            detectors: detectors, reporter: reporter,
+            interval: .seconds(intervalSeconds), heartbeatSeconds: heartbeat
+        )
+
+        let webhookCount = cfg.monitor?.webhooks.count ?? 0
+        printErr("arborist tending — \(detectors.count) detectors every \(intervalSeconds)s, "
+            + "\(webhookCount) webhook(s); log → \(JSONLFileSink.defaultURL.path)")
+        printErr("detection-only: nothing is remediated. Ctrl-C to stop.")
+
+        let task = Task { await monitor.run() }
+        let sources = Self.installSignalHandlers {
+            printErr("\nstopping arborist…")
+            task.cancel()
+        }
+        defer { sources.forEach { $0.cancel() } }
+        await task.value
+    }
+
+    /// Trap SIGINT/SIGTERM and invoke `handler`. Returns the sources to keep alive.
+    private static func installSignalHandlers(_ handler: @escaping @Sendable () -> Void) -> [DispatchSourceSignal] {
+        [SIGINT, SIGTERM].map { sig in
+            signal(sig, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: sig, queue: .global())
+            source.setEventHandler(handler: handler)
+            source.resume()
+            return source
+        }
     }
 
     // MARK: Interactive pickers

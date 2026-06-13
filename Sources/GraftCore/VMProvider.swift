@@ -51,11 +51,19 @@ public protocol VMProvider: Sendable {
     /// how to enumerate its own (local Tart by name prefix, Orchard via its API).
     /// Default no-op for backends that don't need it.
     func sweepOrphans() async
+
+    /// Names of the graft-managed VMs this backend currently has. The health monitor
+    /// diffs this against the supervisor's tracked set to spot "deadwood" — a managed
+    /// VM no slot owns. Default `[]` (a backend that strands nothing).
+    func managedVMNames() async -> [String]
 }
 
 extension VMProvider {
     /// Most backends don't strand host-side state; opt in by overriding.
     public func sweepOrphans() async {}
+
+    /// Default: this backend doesn't track managed VMs by name.
+    public func managedVMNames() async -> [String] { [] }
 
     /// Convenience: acquire with default networking + backend-default sizing.
     public func acquire(image: String, os: GuestOS, mounts: [Mount] = []) async throws -> RunningVM {

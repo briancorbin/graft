@@ -78,6 +78,15 @@ public struct HealthEvent: Codable, Sendable, Equatable, Identifiable {
 
     public var isProblem: Bool { severity == .warn || severity == .critical }
 
+    /// The `.recovered` counterpart of this problem, preserving `key` (category /
+    /// checkID / subject) so a snapshot sink clears the matching active problem.
+    public func recovered(at time: Date = Date()) -> HealthEvent {
+        HealthEvent(
+            severity: .recovered, category: category, checkID: checkID, subject: subject,
+            message: "recovered: \(message)", detail: detail, suggestedAction: nil, timestamp: time
+        )
+    }
+
     /// Compact, single-line, stable-key encoding — for JSONL and webhook bodies.
     /// (No pretty-printing: one event must serialize to exactly one line.)
     public static let compactEncoder: JSONEncoder = {

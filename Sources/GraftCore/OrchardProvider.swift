@@ -134,6 +134,11 @@ public struct OrchardProvider: VMProvider {
         }
     }
 
+    public func managedVMNames() async -> [String] {
+        guard let listing = try? await rawList("vms") else { return [] }
+        return Self.graftVMNames(in: listing)
+    }
+
     /// Pull graft's own VM names out of `orchard list vms` table output — the name is the
     /// first whitespace-delimited column; the `Name` header and other rows are filtered out.
     static func graftVMNames(in listing: String) -> [String] {
