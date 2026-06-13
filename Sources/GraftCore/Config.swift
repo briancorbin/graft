@@ -89,8 +89,14 @@ public struct PoolConfig: Codable, Sendable {
     /// VM networking mode for this pool's runners. Absent (nil) → shared NAT. Set
     /// `bridged:<iface>` on hosts where NAT is blocked (e.g. behind Zscaler).
     public var network: VMNetwork?
+    /// Per-pool VM sizing for this pool's workload — independent of the image (a lint
+    /// pool is small, an e2e pool is fat, same toolchain image). Absent → backend
+    /// default. On Orchard, `memory` is also requested from the scheduler so a branch
+    /// isn't over-packed. See [[VMResources]].
+    public var cpu: Int?
+    public var memory: Int?   // megabytes
 
-    public init(name: String, image: String, os: GuestOS, count: Int, github: GitHubConfig, mounts: [Mount]? = nil, network: VMNetwork? = nil) {
+    public init(name: String, image: String, os: GuestOS, count: Int, github: GitHubConfig, mounts: [Mount]? = nil, network: VMNetwork? = nil, cpu: Int? = nil, memory: Int? = nil) {
         self.name = name
         self.image = image
         self.os = os
@@ -98,12 +104,17 @@ public struct PoolConfig: Codable, Sendable {
         self.github = github
         self.mounts = mounts
         self.network = network
+        self.cpu = cpu
+        self.memory = memory
     }
 
     /// Labels for runners in this pool — explicit config or the computed default.
     public func resolvedLabels() -> [String] {
         github.labels ?? ["self-hosted", os.rawValue, name]
     }
+
+    /// This pool's per-leaf sizing as a `VMResources`.
+    public var resources: VMResources { VMResources(cpu: cpu, memory: memory) }
 }
 
 /// Multi-host backend settings — the Orchard controller graft schedules VMs onto.

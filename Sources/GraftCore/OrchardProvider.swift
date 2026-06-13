@@ -62,9 +62,9 @@ public struct OrchardProvider: VMProvider {
         return min(report.freeSlots, maxVMs)
     }
 
-    public func acquire(image: String, os: GuestOS, mounts: [Mount] = [], network: VMNetwork = .nat) async throws -> RunningVM {
+    public func acquire(image: String, os: GuestOS, mounts: [Mount] = [], network: VMNetwork = .nat, resources: VMResources = .none) async throws -> RunningVM {
         let name = Self.namePrefix + UUID().uuidString.lowercased()
-        let args = Self.createArgs(name: name, image: image, os: os, mounts: mounts, network: network)
+        let args = Self.createArgs(name: name, image: image, os: os, mounts: mounts, network: network, resources: resources)
 
         let created = try await Shell.run(Self.executable, args, environment: env, timeout: .seconds(30))
         guard created.succeeded else {
@@ -253,7 +253,7 @@ public struct OrchardProvider: VMProvider {
     // MARK: Argument building (pure — unit-tested)
 
     /// The full `orchard create vm …` argv for an ephemeral runner VM.
-    static func createArgs(name: String, image: String, os: GuestOS, mounts: [Mount], network: VMNetwork) -> [String] {
+    static func createArgs(name: String, image: String, os: GuestOS, mounts: [Mount], network: VMNetwork, resources: VMResources = .none) -> [String] {
         // No --restart-policy: Orchard already defaults to "Never" (never auto-restart),
         // which is what ephemeral runners want. Passing it is fragile — the API only
         // accepts the capitalized "Never" and rejects the lowercase form.
@@ -262,6 +262,13 @@ public struct OrchardProvider: VMProvider {
             "--image", image,
             "--os", orchardOS(os),
         ]
+        if let cpu = resources.cpu { args += ["--cpu", String(cpu)] }
+        if let memory = resources.memory {
+            args += ["--memory", String(memory)]
+            // Also request it as a schedulable resource so the controller only places
+            // this leaf on a branch with that much memory free (no over-packing → OOM).
+            args += ["--resources", "org.cirruslabs.memory-mib=\(memory)"]
+        }
         for mount in mounts { args += ["--host-dirs", mount.tartDirArg] }
         args += network.orchardFlags
         args.append(name)

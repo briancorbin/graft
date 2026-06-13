@@ -173,7 +173,7 @@ public actor PoolSupervisor {
         while !Task.isCancelled {
             do {
                 report(.acquiring)
-                let vm = try await provider.acquire(image: pool.image, os: pool.os, mounts: pool.mounts ?? [], network: pool.network ?? .nat)
+                let vm = try await provider.acquire(image: pool.image, os: pool.os, mounts: pool.mounts ?? [], network: pool.network ?? .nat, resources: pool.resources)
                 track(vm, pool: pool.name)
                 Log.info("[\(tag)] acquired \(vm.name) (\(vm.ip))")
 

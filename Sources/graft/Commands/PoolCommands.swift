@@ -74,6 +74,12 @@ extension Pool {
         @Option(name: .long, parsing: .singleValue, help: "Host cache mount: path | name:path | name:path:ro (repeatable). Prefer :ro for shared caches.")
         var mount: [String] = []
 
+        @Option(name: .long, help: "CPU cores per leaf for this pool's workload (default: backend default).")
+        var cpu: Int?
+
+        @Option(name: .long, help: "Memory (MB) per leaf for this pool's workload (default: backend default).")
+        var memory: Int?
+
         func run() throws {
             // Profile may not exist yet — create it on first add.
             let profileName = profile ?? Profiles.activeName() ?? "default"
@@ -90,7 +96,7 @@ extension Pool {
             let pool = PoolConfig(
                 name: name, image: image, os: os, count: count,
                 github: GitHubConfig(appId: appId, target: target, runnerGroupId: runnerGroupId, labels: labelList),
-                mounts: mounts.isEmpty ? nil : mounts
+                mounts: mounts.isEmpty ? nil : mounts, cpu: cpu, memory: memory
             )
             let replaced = config.pools.contains { $0.name == name }
             config.pools.removeAll { $0.name == name }

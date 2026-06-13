@@ -248,6 +248,9 @@ extension Tree {
         @Option(name: .long, help: "Labels, comma-separated key=value (e.g. hardware=m4max).")
         var labels: String?
 
+        @Option(name: .long, help: "Reserve N GB of host RAM: advertise (total − N) to the scheduler so leaves can't OOM the host.")
+        var reserve: Int?
+
         func run() async throws {
             try await Tree.requireOrchard()
             printErr(ANSI.green("🌿  grafting a branch onto \(url)…"))
@@ -257,6 +260,16 @@ extension Tree {
             if let name { args += ["--name", name] }
             if let labels {
                 for kv in labels.split(separator: ",") { args += ["--labels", kv.trimmingCharacters(in: .whitespaces)] }
+            }
+            if let reserve {
+                // Advertise (RAM − reserve) so the scheduler keeps a host buffer. Re-state
+                // the auto-detected resources too so overriding memory doesn't drop them.
+                let totalMB = Int(ProcessInfo.processInfo.physicalMemory / (1024 * 1024))
+                let mib = max(1024, totalMB - reserve * 1024)
+                args += ["--resources", "org.cirruslabs.memory-mib=\(mib)"]
+                args += ["--resources", "org.cirruslabs.tart-vms=2"]
+                args += ["--resources", "org.cirruslabs.logical-cores=\(ProcessInfo.processInfo.activeProcessorCount)"]
+                printErr(ANSI.dim("    advertising \(mib) MB (reserving \(reserve) GB for the host)"))
             }
             printErr(ANSI.dim("    branch live — Ctrl-C to drop it.\n"))
             let code = try await Shell.runStreaming("orchard", args, onLine: { line in

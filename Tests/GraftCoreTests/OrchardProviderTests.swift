@@ -58,6 +58,26 @@ struct OrchardProviderTests {
         #expect(softnet.contains("--net-softnet"))
     }
 
+    @Test("create args: pool cpu/memory → --cpu/--memory + a memory-mib resource request")
+    func createArgsResources() {
+        let args = OrchardProvider.createArgs(
+            name: "n", image: "i", os: .macOS, mounts: [], network: .nat,
+            resources: VMResources(cpu: 2, memory: 4096)
+        )
+        #expect(args[args.firstIndex(of: "--cpu")! + 1] == "2")
+        #expect(args[args.firstIndex(of: "--memory")! + 1] == "4096")
+        #expect(args[args.firstIndex(of: "--resources")! + 1] == "org.cirruslabs.memory-mib=4096")
+        #expect(args.last == "n")   // name stays the trailing positional
+    }
+
+    @Test("create args: no resources → no sizing flags (backend default)")
+    func createArgsNoResources() {
+        let args = OrchardProvider.createArgs(name: "n", image: "i", os: .macOS, mounts: [], network: .nat)
+        #expect(!args.contains("--cpu"))
+        #expect(!args.contains("--memory"))
+        #expect(!args.contains("--resources"))
+    }
+
     @Test("VM names carry the graft- prefix so the orphan sweep can find them")
     func namePrefix() {
         #expect(OrchardProvider.namePrefix == "graft-")

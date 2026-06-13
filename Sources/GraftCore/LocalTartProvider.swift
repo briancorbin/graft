@@ -28,10 +28,18 @@ public struct LocalTartProvider: VMProvider {
         }
     }
 
-    public func acquire(image: String, os: GuestOS, mounts: [Mount] = [], network: VMNetwork = .nat) async throws -> RunningVM {
+    public func acquire(image: String, os: GuestOS, mounts: [Mount] = [], network: VMNetwork = .nat, resources: VMResources = .none) async throws -> RunningVM {
         let name = Self.namePrefix + UUID().uuidString.lowercased()
         try await Tart.clone(image: image, to: name)
         do {
+            // Per-pool sizing: resize the clone before boot (overrides the image's bake).
+            if !resources.isEmpty {
+                var setArgs = ["set"]
+                if let cpu = resources.cpu { setArgs += ["--cpu", String(cpu)] }
+                if let memory = resources.memory { setArgs += ["--memory", String(memory)] }
+                setArgs.append(name)
+                _ = try await Shell.run(Tart.executable, setArgs)
+            }
             try Tart.run(name: name, mounts: mounts, network: network)
             let ip = try await Tart.waitForIP(name: name)
             return RunningVM(name: name, ip: ip, os: os)
