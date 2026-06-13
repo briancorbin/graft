@@ -45,17 +45,14 @@ public enum GitHubTarget: Sendable, Equatable, CustomStringConvertible {
 
 /// GitHub App + JIT-runner settings for a pool. Note there is no private-key path:
 /// the App's PEM is resolved from the Keychain by `appId`, never stored on disk.
-public struct GitHubConfig: Codable, Sendable {
+public struct GitHubConfig: Codable, Sendable, Equatable {
     public var appId: Int
     public var target: String
     /// Required for org JIT runners; defaults to the default group (1).
     public var runnerGroupId: Int
-    /// Baked into the JIT config at generation time (immutable after). When nil,
-    /// `PoolConfig.resolvedLabels()` computes `["self-hosted", os, poolName]`.
-    public var labels: [String]?
 
     enum CodingKeys: String, CodingKey {
-        case appId, target, runnerGroupId, labels
+        case appId, target, runnerGroupId
     }
 
     public init(from decoder: Decoder) throws {
@@ -63,14 +60,12 @@ public struct GitHubConfig: Codable, Sendable {
         appId = try c.decode(Int.self, forKey: .appId)
         target = try c.decode(String.self, forKey: .target)
         runnerGroupId = try c.decodeIfPresent(Int.self, forKey: .runnerGroupId) ?? 1
-        labels = try c.decodeIfPresent([String].self, forKey: .labels)
     }
 
-    public init(appId: Int, target: String, runnerGroupId: Int = 1, labels: [String]? = nil) {
+    public init(appId: Int, target: String, runnerGroupId: Int = 1) {
         self.appId = appId
         self.target = target
         self.runnerGroupId = runnerGroupId
-        self.labels = labels
     }
 
     public func parsedTarget() throws -> GitHubTarget { try GitHubTarget(parsing: target) }
@@ -82,7 +77,12 @@ public struct PoolConfig: Codable, Sendable {
     public var image: String
     public var os: GuestOS
     public var count: Int
-    public var github: GitHubConfig
+    /// Per-pool GitHub override (App + target). Absent → inherit the profile's `github`.
+    /// Lets one profile span repos/orgs; normally nil.
+    public var github: GitHubConfig?
+    /// Runner labels (tags) — how a workflow's `runs-on:` targets this pool. Absent →
+    /// `["self-hosted", <os>, <name>]`. Baked into the JIT config (immutable per runner).
+    public var labels: [String]?
     /// Host directory shares mounted into each runner VM (e.g. read-only warm caches).
     /// Absent (nil) → no mounts. See docs/images-and-caching.md for the strategy.
     public var mounts: [Mount]?
@@ -96,12 +96,13 @@ public struct PoolConfig: Codable, Sendable {
     public var cpu: Int?
     public var memory: Int?   // megabytes
 
-    public init(name: String, image: String, os: GuestOS, count: Int, github: GitHubConfig, mounts: [Mount]? = nil, network: VMNetwork? = nil, cpu: Int? = nil, memory: Int? = nil) {
+    public init(name: String, image: String, os: GuestOS, count: Int, github: GitHubConfig? = nil, labels: [String]? = nil, mounts: [Mount]? = nil, network: VMNetwork? = nil, cpu: Int? = nil, memory: Int? = nil) {
         self.name = name
         self.image = image
         self.os = os
         self.count = count
         self.github = github
+        self.labels = labels
         self.mounts = mounts
         self.network = network
         self.cpu = cpu
@@ -110,7 +111,7 @@ public struct PoolConfig: Codable, Sendable {
 
     /// Labels for runners in this pool — explicit config or the computed default.
     public func resolvedLabels() -> [String] {
-        github.labels ?? ["self-hosted", os.rawValue, name]
+        labels ?? ["self-hosted", os.rawValue, name]
     }
 
     /// This pool's per-leaf sizing as a `VMResources`.
@@ -118,7 +119,7 @@ public struct PoolConfig: Codable, Sendable {
 }
 
 /// Multi-host backend settings — the Orchard controller graft schedules VMs onto.
-public struct OrchardConfig: Codable, Sendable {
+public struct OrchardConfig: Codable, Sendable, Equatable {
     /// Controller address, e.g. `https://orchard.example.com:6120`.
     public var controllerURL: URL
     /// Service account the controller authenticates graft as (needs VM compute rights).
@@ -140,6 +141,43 @@ public struct OrchardConfig: Codable, Sendable {
     }
 }
 
+/// The VM backend, self-contained: a discriminator (`type`) plus that backend's own
+/// settings, inline. Encodes/decodes as e.g. `{ "type": "tart" }` or
+/// `{ "type": "orchard", "controllerURL": …, "serviceAccount": …, "maxVMs": … }` — so
+/// there's no separate top-level `orchard` block disconnected from the choice.
+public enum ProviderConfig: Sendable, Equatable {
+    case tart
+    case orchard(OrchardConfig)
+
+    public var typeName: String {
+        switch self { case .tart: return "tart"; case .orchard: return "orchard" }
+    }
+    public var orchard: OrchardConfig? {
+        if case .orchard(let o) = self { return o }; return nil
+    }
+}
+
+extension ProviderConfig: Codable {
+    private enum Keys: String, CodingKey { case type }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        switch try c.decode(String.self, forKey: .type) {
+        case "tart":    self = .tart
+        case "orchard": self = .orchard(try OrchardConfig(from: decoder))   // fields inline
+        case let other:
+            throw DecodingError.dataCorruptedError(forKey: .type, in: c,
+                debugDescription: "unknown provider type '\(other)' — expected 'tart' or 'orchard'")
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: Keys.self)
+        try c.encode(typeName, forKey: .type)
+        if case .orchard(let o) = self { try o.encode(to: encoder) }   // flatten fields alongside `type`
+    }
+}
+
 /// Where the GitHub App PEM lives. Keychain only — `scope` picks login (interactive
 /// `graft run`) vs. system (`--daemon`, headless, root-accessible).
 public struct SecretsConfig: Codable, Sendable {
@@ -155,22 +193,31 @@ public struct SecretsConfig: Codable, Sendable {
 /// Top-level Graft configuration. Loaded from JSON; path resolved from
 /// `--config`, then `$GRAFT_CONFIG`, then `~/.graft/config.json`.
 public struct GraftConfig: Codable, Sendable {
-    public var provider: String
+    /// The VM backend + its settings (self-contained — see `ProviderConfig`).
+    public var provider: ProviderConfig
+    /// Default GitHub App + target for every pool. A pool may override via its own
+    /// `github` (e.g. a profile that spans repos), but normally this is declared once.
+    public var github: GitHubConfig?
     public var pools: [PoolConfig]
-    public var orchard: OrchardConfig?
     public var secrets: SecretsConfig?
 
     public init(
-        provider: String = "tart",
+        provider: ProviderConfig = .tart,
+        github: GitHubConfig? = nil,
         pools: [PoolConfig] = [],
-        orchard: OrchardConfig? = nil,
         secrets: SecretsConfig? = nil
     ) {
         self.provider = provider
+        self.github = github
         self.pools = pools
-        self.orchard = orchard
         self.secrets = secrets
     }
+
+    /// Orchard settings, if this profile's backend is Orchard.
+    public var orchard: OrchardConfig? { provider.orchard }
+
+    /// The effective GitHub config for a pool: its own override, else the profile default.
+    public func gitHub(for pool: PoolConfig) -> GitHubConfig? { pool.github ?? github }
 }
 
 extension GraftConfig {
@@ -230,29 +277,28 @@ extension GraftConfig {
             if pool.image.isEmpty { problems.append("\(tag): image is empty") }
             if pool.count < 0 { problems.append("\(tag): count must be >= 0") }
 
-            do {
-                let target = try pool.github.parsedTarget()
-                if target.isOrg && pool.github.runnerGroupId < 1 {
-                    problems.append("\(tag): runnerGroupId must be >= 1 for org targets")
+            // Each pool needs a GitHub config — its own override or the profile default.
+            if let gh = gitHub(for: pool) {
+                do {
+                    let target = try gh.parsedTarget()
+                    if target.isOrg && gh.runnerGroupId < 1 {
+                        problems.append("\(tag): runnerGroupId must be >= 1 for org targets")
+                    }
+                } catch {
+                    problems.append("\(tag): \(error)")
                 }
-            } catch {
-                problems.append("\(tag): \(error)")
+            } else {
+                problems.append("\(tag): no GitHub config — set a top-level `github` or a pool override")
             }
         }
 
         switch provider {
-        case "tart":
+        case .tart:
             break
-        case "orchard":
-            if let orchard {
-                if orchard.serviceAccount.isEmpty { problems.append("orchard: serviceAccount is empty") }
-                // token is intentionally not required here — it may be Keychain-backed
-                // (resolved at run time) or unused by an unsecured local `orchard dev`.
-            } else {
-                problems.append("provider is 'orchard' but no orchard config provided")
-            }
-        default:
-            problems.append("unknown provider '\(provider)' — expected 'tart' or 'orchard'")
+        case .orchard(let orchard):
+            if orchard.serviceAccount.isEmpty { problems.append("orchard: serviceAccount is empty") }
+            // token is intentionally not required here — it may be Keychain-backed
+            // (resolved at run time) or unused by an unsecured local trunk.
         }
         return problems
     }
@@ -261,19 +307,15 @@ extension GraftConfig {
     public static func template() -> String {
         """
         {
-          "provider": "tart",
+          "provider": { "type": "tart" },
+          "github": { "appId": 12345, "target": "org:my-org" },
           "pools": [
             {
               "name": "macos-release",
               "image": "ghcr.io/cirruslabs/macos-tahoe-xcode:latest",
               "os": "macos",
               "count": 2,
-              "github": {
-                "appId": 12345,
-                "target": "org:my-org",
-                "runnerGroupId": 1,
-                "labels": ["self-hosted", "macos", "graft"]
-              }
+              "labels": ["self-hosted", "macos", "release"]
             }
           ],
           "secrets": { "store": "keychain", "scope": "login" }

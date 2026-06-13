@@ -3,7 +3,7 @@ import Foundation
 /// Registers and deregisters JIT runners for a pool. `GitHubAppClient` is the
 /// production conformer; tests inject a mock. Keeps the supervisor off the network.
 public protocol JITConfigProvider: Sendable {
-    func generateJITRunner(pool: PoolConfig, runnerName: String) async throws -> GitHubAppClient.JITRunner
+    func generateJITRunner(github: GitHubConfig, labels: [String], runnerName: String) async throws -> GitHubAppClient.JITRunner
     func deleteRunner(id: Int, target: GitHubTarget) async throws
 }
 
@@ -164,8 +164,12 @@ public actor PoolSupervisor {
     // MARK: One runner slot
 
     private func runSlot(pool: PoolConfig, index: Int) async {
-        let github = github(pool.github.appId)
         let tag = "\(pool.name)#\(index)"
+        guard let gh = config.gitHub(for: pool) else {
+            Log.warn("[\(tag)] no GitHub config — skipping (set a profile `github` or a pool override)")
+            return
+        }
+        let github = github(gh.appId)
         func report(_ phase: RunnerPhase, _ vm: String? = nil) {
             recordPhase(tag: tag, pool: pool.name, vm: vm, phase: phase)
         }
@@ -180,7 +184,7 @@ public actor PoolSupervisor {
                 var runnerID: Int?
                 do {
                     report(.provisioning, vm.name)
-                    let jit = try await github.generateJITRunner(pool: pool, runnerName: vm.name)
+                    let jit = try await github.generateJITRunner(github: gh, labels: pool.resolvedLabels(), runnerName: vm.name)
                     runnerID = jit.runnerID
                     report(.starting, vm.name)
                     let onLine = makeRunnerLineHandler(tag: tag, pool: pool.name, vm: vm.name)
@@ -198,7 +202,7 @@ public actor PoolSupervisor {
                 // slot's own cancellation: on graceful shutdown the task is already
                 // cancelled here, so a plain `await` would be aborted and leak the
                 // runner — exactly the case this cleans up.
-                if let runnerID, let target = try? pool.github.parsedTarget() {
+                if let runnerID, let target = try? gh.parsedTarget() {
                     report(.deregistering, vm.name)
                     await deregister(runnerID: runnerID, target: target, via: github)
                 }

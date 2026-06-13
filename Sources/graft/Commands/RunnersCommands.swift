@@ -24,14 +24,14 @@ extension Runners {
         var system = false
 
         func run() async throws {
-            let (pools, scope) = try profileTargets(profile: profile, system: system)
+            let (targets, scope) = try profileTargets(profile: profile, system: system)
             let secrets = KeychainSecretStore(scope: scope)
-            for pool in pools {
-                let parsed = try pool.github.parsedTarget()
-                let client = GitHubAppClient(appID: pool.github.appId, secrets: secrets)
+            for gh in targets {
+                let parsed = try gh.parsedTarget()
+                let client = GitHubAppClient(appID: gh.appId, secrets: secrets)
                 let runners = try await client.listRunners(target: parsed)
                     .filter { $0.name.hasPrefix(LocalTartProvider.namePrefix) }
-                print("── app \(pool.github.appId), \(pool.github.target) ──")
+                print("── app \(gh.appId), \(gh.target) ──")
                 if runners.isEmpty { print("  (no graft runners)"); continue }
                 for r in runners {
                     print("  \(r.isOffline ? "⚪️ offline" : "🟢 online ")  \(r.name)  #\(r.id)")
@@ -53,17 +53,17 @@ extension Runners {
         var includeOnline = false
 
         func run() async throws {
-            let (pools, scope) = try profileTargets(profile: profile, system: system)
+            let (targets, scope) = try profileTargets(profile: profile, system: system)
             let secrets = KeychainSecretStore(scope: scope)
             var deleted = 0
-            for pool in pools {
-                let parsed = try pool.github.parsedTarget()
-                let client = GitHubAppClient(appID: pool.github.appId, secrets: secrets)
+            for gh in targets {
+                let parsed = try gh.parsedTarget()
+                let client = GitHubAppClient(appID: gh.appId, secrets: secrets)
                 let husks = try await client.listRunners(target: parsed).filter {
                     $0.name.hasPrefix(LocalTartProvider.namePrefix) && (includeOnline || $0.isOffline)
                 }
                 guard !husks.isEmpty else {
-                    printErr("✓ \(pool.github.target): nothing to prune")
+                    printErr("✓ \(gh.target): nothing to prune")
                     continue
                 }
                 for r in husks {
@@ -81,15 +81,17 @@ extension Runners {
     }
 }
 
-/// The distinct (app, target) pools of a profile, plus the keychain scope to read
-/// their App keys from. Deduped so a target shared by several pools is hit once.
-private func profileTargets(profile: String?, system: Bool) throws -> (pools: [PoolConfig], scope: KeychainScope) {
+/// The distinct (app, target) GitHub configs a profile's pools register against
+/// (resolved: each pool's override, else the profile default), plus the keychain scope.
+/// Deduped so a target shared by several pools is hit once.
+private func profileTargets(profile: String?, system: Bool) throws -> (targets: [GitHubConfig], scope: KeychainScope) {
     let name = try resolveProfileName(profile)
     let cfg = try Profiles.load(name)
-    guard !cfg.pools.isEmpty else { throw GraftError("profile '\(name)' has no pools") }
+    let githubs = cfg.pools.compactMap { cfg.gitHub(for: $0) }
+    guard !githubs.isEmpty else { throw GraftError("profile '\(name)' has no GitHub config") }
 
     var seen = Set<String>()
-    let distinct = cfg.pools.filter { seen.insert("\($0.github.appId)|\($0.github.target)").inserted }
+    let distinct = githubs.filter { seen.insert("\($0.appId)|\($0.target)").inserted }
     let scope: KeychainScope = system ? .system : (KeychainScope(rawValue: cfg.secrets?.scope ?? "login") ?? .login)
     return (distinct, scope)
 }

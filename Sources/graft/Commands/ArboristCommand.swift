@@ -40,7 +40,7 @@ struct Arborist: AsyncParsableCommand {
     var noProbe = false
 
     func run() async throws {
-        let pools: [PoolConfig]
+        let targets: [GitHubConfig]
         let scope: KeychainScope
 
         if appId != nil || target != nil {
@@ -49,13 +49,10 @@ struct Arborist: AsyncParsableCommand {
             scope = system ? .system : .login
             let resolvedAppID = try appId ?? Self.pickAppID(scope: scope)
             let resolvedTarget = try target ?? Self.promptTarget()
-            pools = [PoolConfig(
-                name: "cli", image: "-", os: .macOS, count: 0,
-                github: GitHubConfig(appId: resolvedAppID, target: resolvedTarget, runnerGroupId: runnerGroupId)
-            )]
+            targets = [GitHubConfig(appId: resolvedAppID, target: resolvedTarget, runnerGroupId: runnerGroupId)]
         } else {
-            // Profile mode (default): check every pool in the resolved profile/config —
-            // each pool's App ID + target come straight from config, nothing to retype.
+            // Profile mode (default): check the GitHub config every pool registers against
+            // (resolved: pool override, else the profile default) — nothing to retype.
             let path = GraftConfig.resolvePath(explicit: config, profile: profile)
             let cfg = try GraftConfig.load(from: path)
             let filtered = pool.map { name in cfg.pools.filter { $0.name == name } } ?? cfg.pools
@@ -63,7 +60,12 @@ struct Arborist: AsyncParsableCommand {
                 throw GraftError(pool.map { "no pool named '\($0)'" }
                     ?? "no pools in the active profile — run `graft init`, or pass --app-id/--target for a one-off check")
             }
-            pools = filtered
+            var seen = Set<String>()
+            targets = filtered.compactMap { cfg.gitHub(for: $0) }
+                .filter { seen.insert("\($0.appId)|\($0.target)").inserted }
+            guard !targets.isEmpty else {
+                throw GraftError("profile has no GitHub config — set a top-level `github`, or pass --app-id/--target")
+            }
             scope = system ? .system : (KeychainScope(rawValue: cfg.secrets?.scope ?? "login") ?? .login)
         }
 
@@ -73,12 +75,12 @@ struct Arborist: AsyncParsableCommand {
         func fail(_ step: String, _ error: Error) { printErr("  ✗ \(step): \(error)") }
 
         var failed = false
-        for pool in pools {
-            print("── app \(pool.github.appId), \(pool.github.target) ──")
-            let client = GitHubAppClient(appID: pool.github.appId, secrets: secrets)
+        for gh in targets {
+            print("── app \(gh.appId), \(gh.target) ──")
+            let client = GitHubAppClient(appID: gh.appId, secrets: secrets)
 
             let parsedTarget: GitHubTarget
-            do { parsedTarget = try pool.github.parsedTarget() }
+            do { parsedTarget = try gh.parsedTarget() }
             catch { fail("parse target", error); failed = true; continue }
 
             do { _ = try await client.makeAppJWT(); ok("read key from \(scope.rawValue) keychain + signed App JWT") }
@@ -96,7 +98,7 @@ struct Arborist: AsyncParsableCommand {
 
             let probeName = "graft-doctor-" + UUID().uuidString.prefix(8).lowercased()
             do {
-                let runner = try await client.generateJITRunner(pool: pool, runnerName: probeName)
+                let runner = try await client.generateJITRunner(github: gh, labels: ["self-hosted"], runnerName: probeName)
                 ok("generated JIT config (runner #\(runner.runnerID), \(runner.encodedConfig.count)-byte blob)")
                 do {
                     try await client.deleteRunner(id: runner.runnerID, target: parsedTarget)

@@ -38,7 +38,7 @@ struct Run: AsyncParsableCommand {
         // Local Tart: pull any pool images that aren't cached yet (with progress) before
         // the live UI starts, so the first runner doesn't silently hang on a big download.
         // Orchard workers pull images themselves (image-pull-policy), so skip it there.
-        if cfg.provider == "tart" {
+        if case .tart = cfg.provider {
             for image in Set(cfg.pools.map(\.image)).sorted() {
                 try await Tart.ensureAvailable(image)
             }
@@ -87,22 +87,17 @@ struct Run: AsyncParsableCommand {
     /// `orchard` block is present when the provider is "orchard".
     static func makeProvider(_ cfg: GraftConfig) throws -> any VMProvider {
         switch cfg.provider {
-        case "tart":
+        case .tart:
             return LocalTartProvider()
-        case "orchard":
-            guard var orchard = cfg.orchard else {
-                throw GraftError("provider is 'orchard' but no 'orchard' config block provided")
-            }
+        case .orchard(var orchard):
             // Token resolution: explicit config value wins; otherwise pull it from the
             // Keychain (where `graft init` stashes it) so it's not in plaintext.
-            // Left empty for an unsecured local `orchard dev`, which ignores auth.
+            // Left empty for an unsecured local trunk, which ignores auth.
             if (orchard.token ?? "").isEmpty {
                 let scope = KeychainScope(rawValue: cfg.secrets?.scope ?? "login") ?? .login
                 orchard.token = KeychainSecretStore(scope: scope).orchardToken(account: orchard.serviceAccount)
             }
             return OrchardProvider(config: orchard)
-        default:
-            throw GraftError("unknown provider '\(cfg.provider)' — expected 'tart' or 'orchard'")
         }
     }
 }

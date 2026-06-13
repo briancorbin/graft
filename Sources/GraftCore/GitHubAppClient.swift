@@ -33,16 +33,16 @@ public struct GitHubAppClient: Sendable {
         public let encodedConfig: String
     }
 
-    /// Create a single-use JIT runner for `pool`. Generating the config registers a
-    /// runner entity on GitHub (id returned for cleanup); the blob is ephemeral by
-    /// construction — `./run.sh --jitconfig <blob>`, no `config.sh`.
-    public func generateJITRunner(pool: PoolConfig, runnerName: String) async throws -> JITRunner {
-        let target = try pool.github.parsedTarget()
+    /// Create a single-use JIT runner against `github` with `labels`. Generating the
+    /// config registers a runner entity on GitHub (id returned for cleanup); the blob is
+    /// ephemeral by construction — `./run.sh --jitconfig <blob>`, no `config.sh`.
+    public func generateJITRunner(github: GitHubConfig, labels: [String], runnerName: String) async throws -> JITRunner {
+        let target = try github.parsedTarget()
         let token = try await installationAccessToken(for: target)
         let body: [String: Any] = [
             "name": runnerName,
-            "runner_group_id": pool.github.runnerGroupId,
-            "labels": pool.resolvedLabels(),
+            "runner_group_id": github.runnerGroupId,
+            "labels": labels,
             "work_folder": "_work",
         ]
         let data = try await request(
@@ -62,11 +62,6 @@ public struct GitHubAppClient: Sendable {
         }
         let decoded = try JSONDecoder().decode(Response.self, from: data)
         return JITRunner(runnerID: decoded.runner.id, encodedConfig: decoded.encodedJITConfig)
-    }
-
-    /// Just the JIT blob — the supervisor's hot path.
-    public func generateJITConfig(pool: PoolConfig, runnerName: String) async throws -> String {
-        try await generateJITRunner(pool: pool, runnerName: runnerName).encodedConfig
     }
 
     /// Remove a runner by id (cleanup for offline/probe runners). A runner GitHub has

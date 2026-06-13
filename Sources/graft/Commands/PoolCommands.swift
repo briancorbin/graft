@@ -26,13 +26,12 @@ extension Pool {
         var system = false
 
         func run() async throws {
-            let scope: KeychainScope = system ? .system : .login
             let profileName = profile ?? Profiles.activeName() ?? "default"
             var config = Profiles.exists(profileName)
                 ? try Profiles.load(profileName)
-                : GraftConfig(provider: "tart", secrets: SecretsConfig())
+                : GraftConfig(provider: .tart, secrets: SecretsConfig())
 
-            let pool = try await Wizard.buildPool(scope: scope)
+            let pool = await Wizard.buildPool()
             let replaced = config.pools.contains { $0.name == pool.name }
             config.pools.removeAll { $0.name == pool.name }
             config.pools.append(pool)
@@ -59,16 +58,16 @@ extension Pool {
         @Option(name: .long, help: "Number of runners.")
         var count: Int = 2
 
-        @Option(name: .long, help: "GitHub App ID.")
-        var appId: Int
+        @Option(name: .long, help: "Override the profile's GitHub App ID (with --target). Default: inherit the profile.")
+        var appId: Int?
 
-        @Option(name: .long, help: "Target: org:NAME or repo:OWNER/NAME.")
-        var target: String
+        @Option(name: .long, help: "Override the profile's target: org:NAME or repo:OWNER/NAME (with --app-id).")
+        var target: String?
 
-        @Option(name: .long, help: "Runner group id (default 1).")
+        @Option(name: .long, help: "Runner group id for a --app-id/--target override (default 1).")
         var runnerGroupId: Int = 1
 
-        @Option(name: .long, help: "Comma-separated labels (blank = default).")
+        @Option(name: .long, help: "Comma-separated labels (the pool's tags; blank = default).")
         var labels: String?
 
         @Option(name: .long, parsing: .singleValue, help: "Host cache mount: path | name:path | name:path:ro (repeatable). Prefer :ro for shared caches.")
@@ -85,17 +84,21 @@ extension Pool {
             let profileName = profile ?? Profiles.activeName() ?? "default"
             var config = Profiles.exists(profileName)
                 ? try Profiles.load(profileName)
-                : GraftConfig(provider: "tart", secrets: SecretsConfig())
+                : GraftConfig(provider: .tart, secrets: SecretsConfig())
 
             let labelList = labels?
                 .split(separator: ",")
                 .map { $0.trimmingCharacters(in: .whitespaces) }
                 .filter { !$0.isEmpty }
             let mounts = try mount.map { try Mount(spec: $0) }
+            // GitHub is profile-level; only build a per-pool override if both halves given.
+            let github: GitHubConfig? = (appId != nil && target != nil)
+                ? GitHubConfig(appId: appId!, target: target!, runnerGroupId: runnerGroupId)
+                : nil
 
             let pool = PoolConfig(
                 name: name, image: image, os: os, count: count,
-                github: GitHubConfig(appId: appId, target: target, runnerGroupId: runnerGroupId, labels: labelList),
+                github: github, labels: labelList,
                 mounts: mounts.isEmpty ? nil : mounts, cpu: cpu, memory: memory
             )
             let replaced = config.pools.contains { $0.name == name }
@@ -141,7 +144,8 @@ extension Pool {
                 return
             }
             for pool in config.pools {
-                print("\(pool.name)\t\(pool.os.rawValue)\tx\(pool.count)\t\(pool.image)\tapp \(pool.github.appId)\t\(pool.github.target)")
+                let gh = config.gitHub(for: pool).map { "app \($0.appId)\t\($0.target)" } ?? "(no github)"
+                print("\(pool.name)\t\(pool.os.rawValue)\tx\(pool.count)\t\(pool.image)\t\(gh)")
             }
         }
     }

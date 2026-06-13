@@ -56,7 +56,7 @@ private struct MockProvider: VMProvider {
 
 private struct MockJIT: JITConfigProvider {
     let recorder: Recorder
-    func generateJITRunner(pool: PoolConfig, runnerName: String) async throws -> GitHubAppClient.JITRunner {
+    func generateJITRunner(github: GitHubConfig, labels: [String], runnerName: String) async throws -> GitHubAppClient.JITRunner {
         // Stable per-name id so the deregister assertion is deterministic.
         GitHubAppClient.JITRunner(runnerID: abs(runnerName.hashValue % 1_000_000), encodedConfig: "jit-\(runnerName)")
     }

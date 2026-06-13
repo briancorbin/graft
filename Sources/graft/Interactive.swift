@@ -134,7 +134,8 @@ enum TargetPicker {
         var out: [String] = []
         for name in Profiles.names() {
             guard let cfg = try? Profiles.load(name) else { continue }
-            out.append(contentsOf: cfg.pools.map { $0.github.target })
+            if let t = cfg.github?.target { out.append(t) }
+            out.append(contentsOf: cfg.pools.compactMap { $0.github?.target })
         }
         return dedupe(out)
     }
@@ -209,7 +210,7 @@ enum DevBoxPicker {
     private static func appCredentials(profile: String?) -> (Int, KeychainScope)? {
         guard let name = try? resolveProfileName(profile),
               let cfg = try? Profiles.load(name),
-              let appID = cfg.pools.first?.github.appId else { return nil }
+              let appID = cfg.github?.appId ?? cfg.pools.first?.github?.appId else { return nil }
         let scope = KeychainScope(rawValue: cfg.secrets?.scope ?? "login") ?? .login
         return (appID, scope)
     }
@@ -266,24 +267,20 @@ enum ImagePicker {
 /// Shared interactive flows behind `init`, `profile create`, and `pool new` —
 /// one source of truth so the three entry points can't drift.
 enum Wizard {
-    /// Prompt for a single pool's fields (image via `ImagePicker`, App via `AppPicker`).
-    static func buildPool(scope: KeychainScope) async throws -> PoolConfig {
+    /// Prompt for a single pool — its workload only (name, OS, image, count, labels).
+    /// GitHub (App + target) is profile-level, so pools don't carry it.
+    static func buildPool() async -> PoolConfig {
         printErr("\n— New pool —")
         let name = Prompt.line("Pool name", default: "mac")
         let os: GuestOS = Prompt.choose("Guest OS?", ["macOS", "Linux"]) == 0 ? .macOS : .linux
         let image = await ImagePicker.resolve()
         let count = Prompt.int("How many runners?", default: os == .macOS ? 2 : 4)
-        let appID = try AppPicker.resolve(scope: scope)
-        let target = await TargetPicker.resolve(appID: appID, scope: scope)
-        let labelsRaw = Prompt.line("Labels (comma-separated; blank = default)", default: "")
+        let labelsRaw = Prompt.line("Labels (comma-separated; blank → self-hosted,\(os.rawValue),\(name))", default: "")
         let labels = labelsRaw.isEmpty
             ? nil
             : labelsRaw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
 
-        return PoolConfig(
-            name: name, image: image, os: os, count: count,
-            github: GitHubConfig(appId: appID, target: target, runnerGroupId: 1, labels: labels)
-        )
+        return PoolConfig(name: name, image: image, os: os, count: count, labels: labels)
     }
 
     /// Full profile wizard: name → one-or-more pools → keychain secrets → save →
@@ -295,15 +292,21 @@ enum Wizard {
         let profileName = Prompt.line("Profile name", default: "default")
         var config = Profiles.exists(profileName)
             ? ((try? Profiles.load(profileName)) ?? GraftConfig())
-            : GraftConfig(provider: "tart")
+            : GraftConfig(provider: .tart)
         if Profiles.exists(profileName) {
             printErr("(extending existing profile '\(profileName)')")
         }
 
         try await chooseBackend(into: &config, scope: scope)
 
+        // GitHub App + target are profile-level — every pool registers here (a pool can
+        // override later, but that's rare). Collect once.
+        let appID = try AppPicker.resolve(scope: scope)
+        let target = await TargetPicker.resolve(appID: appID, scope: scope)
+        config.github = GitHubConfig(appId: appID, target: target)
+
         repeat {
-            let pool = try await buildPool(scope: scope)
+            let pool = await buildPool()
             config.pools.removeAll { $0.name == pool.name }
             config.pools.append(pool)
         } while Prompt.confirm("Add another pool?", default: false)
@@ -334,8 +337,7 @@ enum Wizard {
     static func chooseBackend(into config: inout GraftConfig, scope: KeychainScope) async throws {
         let isOrchard = Prompt.choose("Backend?", ["Local Tart (single host)", "Orchard tree (multi-host)"]) == 1
         guard isOrchard else {
-            config.provider = "tart"
-            config.orchard = nil
+            config.provider = .tart
             return
         }
         guard let v = try? await Shell.run("orchard", ["--version"]), v.succeeded else {
@@ -355,8 +357,7 @@ enum Wizard {
         let account = Prompt.line("Service account name", default: config.orchard?.serviceAccount ?? "graft")
         try await ensureOrchardToken(account: account, url: url, scope: scope)
         let maxVMs = Prompt.int("Max leaves graft should ask for (ceiling)", default: config.orchard?.maxVMs ?? 8)
-        config.provider = "orchard"
-        config.orchard = OrchardConfig(controllerURL: url, serviceAccount: account, token: nil, maxVMs: maxVMs)
+        config.provider = .orchard(OrchardConfig(controllerURL: url, serviceAccount: account, token: nil, maxVMs: maxVMs))
         printErr("✓ tree backend wired → \(url.absoluteString)")
     }
 

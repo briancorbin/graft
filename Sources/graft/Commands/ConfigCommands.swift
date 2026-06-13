@@ -41,7 +41,7 @@ extension ConfigCommand {
             guard !skipKeys else { return }
             let scope = KeychainScope(rawValue: cfg.secrets?.scope ?? "login") ?? .login
             let store = KeychainSecretStore(scope: scope)
-            for appID in Set(cfg.pools.map(\.github.appId)).sorted() {
+            for appID in Set(cfg.pools.compactMap { cfg.gitHub(for: $0)?.appId }).sorted() {
                 do {
                     _ = try await store.privateKeyPEM(forAppID: appID)
                     print("  ✓ app \(appID): key present in \(scope.rawValue) keychain")

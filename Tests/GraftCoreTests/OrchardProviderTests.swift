@@ -222,13 +222,13 @@ struct OrchardConfigTests {
     func decode() throws {
         let json = #"""
         {
-          "provider": "orchard",
-          "pools": [{"name":"m","image":"i","os":"macos","count":2,"github":{"appId":1,"target":"org:o"}}],
-          "orchard": {"controllerURL":"https://c:6120","serviceAccount":"graft","token":"t","maxVMs":12}
+          "provider": { "type": "orchard", "controllerURL": "https://c:6120", "serviceAccount": "graft", "token": "t", "maxVMs": 12 },
+          "github": { "appId": 1, "target": "org:o" },
+          "pools": [{"name":"m","image":"i","os":"macos","count":2}]
         }
         """#
         let cfg = try JSONDecoder().decode(GraftConfig.self, from: Data(json.utf8))
-        #expect(cfg.provider == "orchard")
+        #expect(cfg.provider.typeName == "orchard")
         #expect(cfg.orchard?.serviceAccount == "graft")
         #expect(cfg.orchard?.maxVMs == 12)
         #expect(cfg.validate().isEmpty)
@@ -241,30 +241,26 @@ struct OrchardConfigTests {
         #expect(oc.maxVMs == nil)
     }
 
-    @Test("orchard provider without an orchard block is a validation problem")
-    func missingBlock() {
-        let cfg = GraftConfig(provider: "orchard", pools: [samplePool()], orchard: nil)
-        #expect(cfg.validate().contains { $0.contains("no orchard config") })
+    @Test("decoding an unknown provider type throws")
+    func unknownProviderType() {
+        let json = #"{"provider":{"type":"vmware"},"pools":[]}"#
+        #expect(throws: (any Error).self) {
+            try JSONDecoder().decode(GraftConfig.self, from: Data(json.utf8))
+        }
     }
 
     @Test("orchard provider with empty serviceAccount is flagged")
     func emptyServiceAccount() {
         let oc = OrchardConfig(controllerURL: URL(string: "https://c:6120")!, serviceAccount: "", token: "")
-        let cfg = GraftConfig(provider: "orchard", pools: [samplePool()], orchard: oc)
+        let cfg = GraftConfig(provider: .orchard(oc), pools: [samplePool()])
         #expect(cfg.validate().contains { $0.contains("serviceAccount is empty") })
     }
 
     @Test("orchard token is optional (Keychain-backed / unsecured dev) — not a validation problem")
     func tokenOptional() {
         let oc = OrchardConfig(controllerURL: URL(string: "https://c:6120")!, serviceAccount: "graft", token: nil)
-        let cfg = GraftConfig(provider: "orchard", pools: [samplePool()], orchard: oc)
+        let cfg = GraftConfig(provider: .orchard(oc), pools: [samplePool()])
         #expect(cfg.validate().isEmpty)
-    }
-
-    @Test("an unknown provider is rejected")
-    func unknownProvider() {
-        let cfg = GraftConfig(provider: "vmware", pools: [samplePool()])
-        #expect(cfg.validate().contains { $0.contains("unknown provider") })
     }
 
     private func samplePool() -> PoolConfig {
