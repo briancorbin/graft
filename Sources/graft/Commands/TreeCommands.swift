@@ -289,6 +289,9 @@ extension Tree {
         @Option(name: .long, help: "Reserve N GB of host RAM: advertise (total − N) to the scheduler so leaves can't OOM the host.")
         var reserve: Int?
 
+        @Option(name: .long, help: "How many leaves this branch can hold (org.cirruslabs.tart-vms). Default: the host's auto-detected ceiling (2 on macOS). Use --leaves 1 per branch if running two branches on one Mac.")
+        var leaves: Int?
+
         @Flag(name: .long, help: "Also tend this branch: host-vitals monitoring (disk/memory/tart, detection-only).")
         var tend = false
 
@@ -302,15 +305,14 @@ extension Tree {
             if let labels {
                 for kv in labels.split(separator: ",") { args += ["--labels", kv.trimmingCharacters(in: .whitespaces)] }
             }
-            if let reserve {
-                // Advertise (RAM − reserve) so the scheduler keeps a host buffer. Re-state
-                // the auto-detected resources too so overriding memory doesn't drop them.
-                let totalMB = Int(ProcessInfo.processInfo.physicalMemory / (1024 * 1024))
-                let mib = max(1024, totalMB - reserve * 1024)
-                args += ["--resources", "org.cirruslabs.memory-mib=\(mib)"]
-                args += ["--resources", "org.cirruslabs.tart-vms=2"]
-                args += ["--resources", "org.cirruslabs.logical-cores=\(ProcessInfo.processInfo.activeProcessorCount)"]
-                printErr(ANSI.dim("    advertising \(mib) MB (reserving \(reserve) GB for the host)"))
+            let resourceArgs = OrchardProvider.workerResourceArgs(
+                leaves: leaves, reserve: reserve,
+                totalMB: Int(ProcessInfo.processInfo.physicalMemory / (1024 * 1024)),
+                cores: ProcessInfo.processInfo.activeProcessorCount)
+            args += resourceArgs
+            if !resourceArgs.isEmpty {
+                let reserveNote = reserve.map { " · reserving \($0) GB" } ?? ""
+                printErr(ANSI.dim("    advertising \(leaves ?? 2) leaf slot(s)\(reserveNote)"))
             }
             let monitorTask: Task<Void, Never>? = tend
                 ? Tree.startHostMonitor(HealthMonitorFactory.branchDetectors(name: name ?? ProcessInfo.processInfo.hostName))

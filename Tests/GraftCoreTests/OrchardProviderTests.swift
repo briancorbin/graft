@@ -13,6 +13,22 @@ struct OrchardProviderTests {
         ))
     }
 
+    // MARK: worker resource args
+
+    @Test("workerResourceArgs: empty unless leaves/reserve set; re-states all three when overriding")
+    func workerResourceArgs() {
+        #expect(OrchardProvider.workerResourceArgs(leaves: nil, reserve: nil, totalMB: 24576, cores: 12).isEmpty)
+
+        let leaves = OrchardProvider.workerResourceArgs(leaves: 1, reserve: nil, totalMB: 24576, cores: 12)
+        #expect(leaves.contains("org.cirruslabs.tart-vms=1"))
+        #expect(leaves.contains("org.cirruslabs.memory-mib=24576"))   // no reserve → full RAM
+        #expect(leaves.contains("org.cirruslabs.logical-cores=12"))
+
+        let reserve = OrchardProvider.workerResourceArgs(leaves: nil, reserve: 4, totalMB: 24576, cores: 12)
+        #expect(reserve.contains("org.cirruslabs.tart-vms=2"))        // default slots
+        #expect(reserve.contains("org.cirruslabs.memory-mib=20480"))  // 24576 − 4096
+    }
+
     // MARK: stale workers
 
     @Test("lastSeenAge parses the orchard Go timestamp and ages it against now")

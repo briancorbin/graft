@@ -293,6 +293,21 @@ public struct OrchardProvider: VMProvider {
 
     // MARK: Argument building (pure — unit-tested)
 
+    /// `--resources` flags for `orchard worker run` when graft overrides a worker's advertised
+    /// capacity. Orchard's `--resources` *replaces* the auto-detected set, so we re-state all
+    /// three (leaf slots, memory, cores) whenever `leaves` or `reserve` is given. Returns []
+    /// when neither is set — let the worker auto-detect (2 macOS slots on Apple Silicon).
+    public static func workerResourceArgs(leaves: Int?, reserve: Int?, totalMB: Int, cores: Int) -> [String] {
+        guard leaves != nil || reserve != nil else { return [] }
+        let mib = max(1024, totalMB - (reserve ?? 0) * 1024)
+        let slots = leaves ?? 2
+        return [
+            "--resources", "org.cirruslabs.tart-vms=\(slots)",
+            "--resources", "org.cirruslabs.memory-mib=\(mib)",
+            "--resources", "org.cirruslabs.logical-cores=\(cores)",
+        ]
+    }
+
     /// The full `orchard create vm …` argv for an ephemeral runner VM.
     static func createArgs(name: String, image: String, os: GuestOS, mounts: [Mount], network: VMNetwork, resources: VMResources = .none) -> [String] {
         // No --restart-policy: Orchard already defaults to "Never" (never auto-restart),
