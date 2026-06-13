@@ -62,7 +62,7 @@ public struct OrchardProvider: VMProvider {
         return min(report.freeSlots, maxVMs)
     }
 
-    public func acquire(image: String, os: GuestOS, mounts: [Mount] = [], network: VMNetwork = .nat, resources: VMResources = .none) async throws -> RunningVM {
+    public func acquire(image: String, os: GuestOS, mounts: [Mount], network: VMNetwork, resources: VMResources, onProgress: (@Sendable (AcquireProgress) -> Void)?) async throws -> RunningVM {
         let name = Self.namePrefix + UUID().uuidString.lowercased()
         let args = Self.createArgs(name: name, image: image, os: os, mounts: mounts, network: network, resources: resources)
 
@@ -70,8 +70,9 @@ public struct OrchardProvider: VMProvider {
         guard created.succeeded else {
             throw GraftError("`orchard create vm` failed: \(Self.message(created))")
         }
+        onProgress?(.scheduling)   // submitted — the controller now has to place it on a branch
         do {
-            let worker = try await waitForRunning(name)
+            let worker = try await waitForRunning(name, onProgress: onProgress)
             return RunningVM(name: name, ip: worker, os: os)
         } catch {
             // Don't leak a scheduled-but-doomed VM.
@@ -333,13 +334,15 @@ public struct OrchardProvider: VMProvider {
     private func waitForRunning(
         _ name: String,
         timeout: Duration = .seconds(600),
-        pollInterval: Duration = .seconds(3)
+        pollInterval: Duration = .seconds(3),
+        onProgress: (@Sendable (AcquireProgress) -> Void)? = nil
     ) async throws -> String {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: timeout)
         while clock.now < deadline {
             switch (try? await field(name, "status"))?.lowercased() ?? "" {
             case "running":
+                onProgress?(.booting)   // a branch took it — the guest is now coming up
                 let worker = try? await field(name, "worker")
                 return (worker?.isEmpty == false) ? worker! : "orchard"
             case "failed":

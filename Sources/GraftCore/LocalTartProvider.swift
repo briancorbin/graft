@@ -28,7 +28,7 @@ public struct LocalTartProvider: VMProvider {
         }
     }
 
-    public func acquire(image: String, os: GuestOS, mounts: [Mount] = [], network: VMNetwork = .nat, resources: VMResources = .none) async throws -> RunningVM {
+    public func acquire(image: String, os: GuestOS, mounts: [Mount], network: VMNetwork, resources: VMResources, onProgress: (@Sendable (AcquireProgress) -> Void)?) async throws -> RunningVM {
         let name = Self.namePrefix + UUID().uuidString.lowercased()
         try await Tart.clone(image: image, to: name)
         do {
@@ -40,6 +40,7 @@ public struct LocalTartProvider: VMProvider {
                 setArgs.append(name)
                 _ = try await Shell.run(Tart.executable, setArgs)
             }
+            onProgress?(.booting)   // local Tart: clone done, the guest is now coming up
             try Tart.run(name: name, mounts: mounts, network: network)
             let ip = try await Tart.waitForIP(name: name)
             return RunningVM(name: name, ip: ip, os: os)

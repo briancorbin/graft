@@ -13,6 +13,15 @@ public struct VMResources: Sendable, Equatable {
     public var isEmpty: Bool { cpu == nil && memory == nil }
 }
 
+/// Progress emitted during `acquire`, so the supervisor can show an honest phase:
+/// `scheduling` = submitted, waiting for the backend to place the leaf on a branch (the
+/// Orchard "pending" window); `booting` = placed/cloned, the guest is coming up. Local Tart
+/// has no controller, so it goes straight to `booting`.
+public enum AcquireProgress: Sendable {
+    case scheduling
+    case booting
+}
+
 /// The central abstraction. The pool supervisor never calls `tart` directly — it
 /// always goes through a provider. This is what makes Orchard (multi-host) or a
 /// future native backend (Twig) a drop-in swap rather than a rewrite.
@@ -27,7 +36,7 @@ public protocol VMProvider: Sendable {
     /// the VM's networking mode (default shared NAT); `resources` sizes the leaf
     /// (CPU/memory) per the pool — on Orchard it's also requested from the scheduler so
     /// a branch won't be over-packed.
-    func acquire(image: String, os: GuestOS, mounts: [Mount], network: VMNetwork, resources: VMResources) async throws -> RunningVM
+    func acquire(image: String, os: GuestOS, mounts: [Mount], network: VMNetwork, resources: VMResources, onProgress: (@Sendable (AcquireProgress) -> Void)?) async throws -> RunningVM
 
     /// Stop and destroy a VM. Idempotent where possible — releasing an
     /// already-gone VM should not throw.
@@ -65,9 +74,14 @@ extension VMProvider {
     /// Default: this backend doesn't track managed VMs by name.
     public func managedVMNames() async -> [String] { [] }
 
-    /// Convenience: acquire with default networking + backend-default sizing.
+    /// Convenience: acquire with default networking + backend-default sizing, no progress.
     public func acquire(image: String, os: GuestOS, mounts: [Mount] = []) async throws -> RunningVM {
-        try await acquire(image: image, os: os, mounts: mounts, network: .nat, resources: .none)
+        try await acquire(image: image, os: os, mounts: mounts, network: .nat, resources: .none, onProgress: nil)
+    }
+
+    /// Convenience: explicit sizing, no progress callback (callers that don't show phases).
+    public func acquire(image: String, os: GuestOS, mounts: [Mount], network: VMNetwork, resources: VMResources) async throws -> RunningVM {
+        try await acquire(image: image, os: os, mounts: mounts, network: network, resources: resources, onProgress: nil)
     }
 
     /// Convenience: unbounded exec (kept for callers that don't need a timeout).

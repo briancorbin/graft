@@ -164,7 +164,8 @@ public enum HealthMonitorFactory {
         // State-backed detectors — only meaningful on the trunk host.
         if isTrunk {
             let transientPhases: Set<String> = [
-                "acquiring", "provisioning", "starting", "connected", "deregistering", "stopping", "retrying",
+                "acquiring", "scheduling", "booting", "provisioning", "starting", "connected",
+                "deregistering", "stopping", "retrying",
             ]
             let stuckTimeout = TimeInterval(config.monitor?.slotStuckTimeoutSeconds ?? 300)
             detectors.append(SupervisorSlotDetector(

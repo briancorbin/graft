@@ -19,9 +19,11 @@ extension RunnerProvisioner: RunnerRunner {}
 /// What a runner slot is currently doing — surfaced to an optional status reporter
 /// so a live UI (the `graft run` spinner dashboard) can show per-slot progress.
 public enum RunnerPhase: Sendable {
-    case acquiring          // cloning + booting the VM
+    case acquiring          // submitted; cloning/creating the leaf
     case waitingForCapacity // fleet has no room right now — parked, not churning a doomed acquire
-    case provisioning       // VM booted; registering the JIT runner with GitHub
+    case scheduling         // Orchard: submitted, waiting for a branch to take it (pending placement)
+    case booting            // placed/cloned; the guest is coming up
+    case provisioning       // leaf up; registering the JIT runner with GitHub
     case starting           // runner process launched, configuring inside the guest
     case connected          // connected to GitHub; configuring before it listens
     case ready              // connected + listening for jobs
@@ -33,15 +35,17 @@ public enum RunnerPhase: Sendable {
 
     public var label: String {
         switch self {
-        case .acquiring: return "acquiring VM"
+        case .acquiring: return "acquiring leaf"
         case .waitingForCapacity: return "waiting for capacity"
+        case .scheduling: return "scheduling · waiting for a branch"
+        case .booting: return "booting leaf"
         case .provisioning: return "registering runner"
         case .starting: return "starting up"
         case .connected: return "connected · preparing"
         case .ready: return "ready · waiting for jobs"
         case .busy(let job): return "running job: \(job)"
         case .deregistering: return "deregistering runner"
-        case .stopping: return "stopping VM"
+        case .stopping: return "stopping leaf"
         case .retrying: return "retrying…"
         case .done: return "done"
         }
@@ -52,6 +56,8 @@ public enum RunnerPhase: Sendable {
         switch self {
         case .acquiring: return "acquiring"
         case .waitingForCapacity: return "waiting"
+        case .scheduling: return "scheduling"
+        case .booting: return "booting"
         case .provisioning: return "provisioning"
         case .starting: return "starting"
         case .connected: return "connected"
@@ -189,7 +195,16 @@ public actor PoolSupervisor {
                 }
                 if Task.isCancelled { break }
                 report(.acquiring)
-                let vm = try await provider.acquire(image: pool.image, os: pool.os, mounts: pool.mounts ?? [], network: pool.network ?? .nat, resources: pool.resources)
+                // Surface the leaf's real lifecycle: scheduling (waiting for a branch) vs booting.
+                let onProgress: @Sendable (AcquireProgress) -> Void = { progress in
+                    let phase: RunnerPhase
+                    switch progress {
+                    case .scheduling: phase = .scheduling
+                    case .booting: phase = .booting
+                    }
+                    Task { await self.recordPhase(tag: tag, pool: pool.name, vm: nil, phase: phase) }
+                }
+                let vm = try await provider.acquire(image: pool.image, os: pool.os, mounts: pool.mounts ?? [], network: pool.network ?? .nat, resources: pool.resources, onProgress: onProgress)
                 track(vm, pool: pool.name)
                 Log.info("[\(tag)] acquired \(vm.name) (\(vm.ip))")
 
