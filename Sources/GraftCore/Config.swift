@@ -178,6 +178,53 @@ extension ProviderConfig: Codable {
     }
 }
 
+/// Health-monitoring settings for `graft arborist --tend`. Absent → built-in defaults
+/// (observe-only, no webhooks). Detection-first: nothing here remediates — these tune
+/// what the monitor *watches* and where it *reports*, never what it would change.
+public struct MonitorConfig: Codable, Sendable, Equatable {
+    /// Seconds between detector sweeps. Default 60.
+    public var intervalSeconds: Int
+    /// Webhook URLs each event is POSTed to (vendor-neutral JSON). Default none — a
+    /// Slack/PagerDuty/Sentry receiver is a thin reformatter in front of one of these.
+    public var webhooks: [URL]
+    /// Emit an info heartbeat at most this often even when healthy, so a quiet monitor
+    /// is distinguishable from a dead one. Default 300; 0 disables.
+    public var heartbeatSeconds: Int
+    /// A slot wedged in a transient phase longer than this is flagged. Default 300.
+    public var slotStuckTimeoutSeconds: Int
+    /// Only POST events at/above this severity to webhooks (`info`|`warn`|`critical`);
+    /// recoveries always go. Default `warn`.
+    public var webhookMinSeverity: String
+
+    enum CodingKeys: String, CodingKey {
+        case intervalSeconds, webhooks, heartbeatSeconds, slotStuckTimeoutSeconds, webhookMinSeverity
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        intervalSeconds = try c.decodeIfPresent(Int.self, forKey: .intervalSeconds) ?? 60
+        webhooks = try c.decodeIfPresent([URL].self, forKey: .webhooks) ?? []
+        heartbeatSeconds = try c.decodeIfPresent(Int.self, forKey: .heartbeatSeconds) ?? 300
+        slotStuckTimeoutSeconds = try c.decodeIfPresent(Int.self, forKey: .slotStuckTimeoutSeconds) ?? 300
+        webhookMinSeverity = try c.decodeIfPresent(String.self, forKey: .webhookMinSeverity) ?? "warn"
+    }
+
+    public init(
+        intervalSeconds: Int = 60, webhooks: [URL] = [], heartbeatSeconds: Int = 300,
+        slotStuckTimeoutSeconds: Int = 300, webhookMinSeverity: String = "warn"
+    ) {
+        self.intervalSeconds = intervalSeconds
+        self.webhooks = webhooks
+        self.heartbeatSeconds = heartbeatSeconds
+        self.slotStuckTimeoutSeconds = slotStuckTimeoutSeconds
+        self.webhookMinSeverity = webhookMinSeverity
+    }
+
+    public var resolvedWebhookMinSeverity: HealthEvent.Severity {
+        HealthEvent.Severity(rawValue: webhookMinSeverity) ?? .warn
+    }
+}
+
 /// Where the GitHub App PEM lives. Keychain only — `scope` picks login (interactive
 /// `graft run`) vs. system (`--daemon`, headless, root-accessible).
 public struct SecretsConfig: Codable, Sendable {
@@ -200,17 +247,22 @@ public struct GraftConfig: Codable, Sendable {
     public var github: GitHubConfig?
     public var pools: [PoolConfig]
     public var secrets: SecretsConfig?
+    /// Health-monitoring settings for `graft arborist --tend`. Absent → defaults
+    /// (observe-only, no webhooks). Optional, so existing configs load unchanged.
+    public var monitor: MonitorConfig?
 
     public init(
         provider: ProviderConfig = .tart,
         github: GitHubConfig? = nil,
         pools: [PoolConfig] = [],
-        secrets: SecretsConfig? = nil
+        secrets: SecretsConfig? = nil,
+        monitor: MonitorConfig? = nil
     ) {
         self.provider = provider
         self.github = github
         self.pools = pools
         self.secrets = secrets
+        self.monitor = monitor
     }
 
     /// Orchard settings, if this profile's backend is Orchard.

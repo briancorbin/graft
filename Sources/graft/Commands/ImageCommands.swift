@@ -2,12 +2,12 @@ import ArgumentParser
 import Foundation
 import GraftCore
 
-/// `graft image …` — build and manage Tart images (the golden VMs that runners and
-/// `graft dev` clone from).
+/// `graft sapling …` — grow and manage saplings (the golden images that leaves and
+/// nests clone from). A sapling grows from a `.graft` seed.
 struct Image: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "image",
-        abstract: "Build and manage Tart images.",
+        commandName: "sapling",
+        abstract: "Grow and manage saplings — the golden images leaves clone from.",
         subcommands: [Build.self, Render.self, List.self, Remove.self, Prune.self, Push.self, Pull.self, Template.self]
     )
 }
@@ -26,36 +26,39 @@ func recipeScriptBody(_ recipe: ImageRecipe, recipeFile: String) throws -> Strin
 
 extension Image {
     struct Build: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(abstract: "Build an image from a .graft / YAML / JSON recipe.")
+        static let configuration = CommandConfiguration(
+            commandName: "grow",
+            abstract: "Grow a sapling from a .graft seed (also YAML / JSON)."
+        )
 
-        @Option(name: .shortAndLong, help: "Recipe file (.graft / .yml / .json). See `graft image template`.")
-        var file: String
+        @Option(name: .shortAndLong, help: "Seed file (.graft / .yml / .json). See `graft sapling template`.")
+        var seed: String
 
-        @Option(name: .long, help: "Override the image name from the recipe.")
+        @Option(name: .long, help: "Override the sapling name from the seed.")
         var name: String?
 
         func run() async throws {
-            var recipe = try ImageRecipe.load(from: file)
+            var recipe = try ImageRecipe.load(from: seed)
             if let name { recipe.name = name }
 
-            let scriptBody = try recipeScriptBody(recipe, recipeFile: file)
-            printErr("building image '\(recipe.name)' from \(recipe.from)…\n")
+            let scriptBody = try recipeScriptBody(recipe, recipeFile: seed)
+            printErr("growing sapling '\(recipe.name)' from \(recipe.from)…\n")
             try await ImageBuilder().build(recipe, scriptBody: scriptBody) { line in
                 FileHandle.standardError.write(Data((line + "\n").utf8))
             }
-            printErr("\n✓ built '\(recipe.name)' — reference it in a pool's `image`, or `graft dev --image \(recipe.name)`")
+            printErr("\n✓ grew '\(recipe.name)' — reference it in a pool's `image`, or `graft nest --image \(recipe.name)`")
         }
     }
 
     struct Render: AsyncParsableCommand {
         static let configuration = CommandConfiguration(abstract: "Print the provisioning script a recipe compiles to (no build).")
 
-        @Option(name: .shortAndLong, help: "Recipe file (.graft / .yml / .json).")
-        var file: String
+        @Option(name: .shortAndLong, help: "Seed file (.graft / .yml / .json).")
+        var seed: String
 
         func run() throws {
-            let recipe = try ImageRecipe.load(from: file)
-            let scriptBody = try recipeScriptBody(recipe, recipeFile: file)
+            let recipe = try ImageRecipe.load(from: seed)
+            let scriptBody = try recipeScriptBody(recipe, recipeFile: seed)
             print("# image '\(recipe.name)' from \(recipe.from)")
             print(recipe.provisioning(scriptBody: scriptBody) ?? "# (nothing to provision)")
         }

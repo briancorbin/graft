@@ -8,13 +8,13 @@
 One golden [Tart](https://tart.run) VM image for macOS & Linux that powers both your
 **dev environment** and your **ephemeral CI runners**. Open-source and fleet-ready.
 
-Graft does three things off one `.graft` image recipe:
+Graft does three things off one `.graft` seed:
 
-- **`graft image build`** — bake a golden VM with your full toolchain and warm caches
-  (Xcode, Node, CocoaPods, Detox…) baked in.
-- **`graft dev`** — develop *inside* that VM over VS Code Remote-SSH. Codespaces for
+- **`graft sapling grow`** — grow a golden image (a *sapling*) with your full toolchain and
+  warm caches (Xcode, Node, CocoaPods, Detox…) baked in.
+- **`graft nest`** — develop *inside* that image over VS Code Remote-SSH. Codespaces for
   native macOS/iOS, off the exact image your CI uses.
-- **`graft run`** — ephemeral GitHub Actions runners: each boots a fresh VM, registers
+- **`graft arborist tend`** — ephemeral GitHub Actions runners: each boots a fresh VM, registers
   with GitHub, runs **exactly one job**, then tears itself down. No state drift, no
   leftover secrets — ephemerality is enforced by construction (JIT runners), not by
   convention.
@@ -43,8 +43,9 @@ multi-host fleets and a shared dev/CI image.
 | Keychain secret store (login + system) | ✅ working (cross-process read needs ACL hardening) |
 | `tart exec` provisioning + runner loop | ✅ built (runner download unverified on a live VM) |
 | Pool supervisor + state + daemon | ✅ built & unit-tested |
-| Image builder + `graft dev` + `.graft` recipes | ✅ built & tested (real image baked end-to-end) |
+| Image builder + `graft nest` + `.graft` recipes | ✅ built & tested (real image baked end-to-end) |
 | Orchard multi-host backend | ✅ verified end-to-end against a live controller — [docs/orchard.md](docs/orchard.md) |
+| Health monitor (`--tend` on run / tree branch / tree plant) | ✅ built & unit-tested — detection-only, per-role agents, [docs/health-and-monitoring.md](docs/health-and-monitoring.md) |
 
 Built and driven through end-to-end; the parts that need real GitHub credentials or
 a booted VM to fully prove are flagged in code (`TODO(real-VM)`).
@@ -124,10 +125,10 @@ multi-repo profile. A **pool** is just its workload: `image`, `count`, `os`, `la
 (its tags — `runs-on:` targets these; default `["self-hosted", <os>, <name>]`), and
 optional `cpu`/`memory` per leaf. `runnerGroupId` defaults to `1`.
 
-### 4. Run
+### 4. Tend
 
 ```sh
-graft run                      # foreground, Ctrl+C to stop
+graft arborist tend            # foreground, Ctrl+C to stop (--monitor to report health)
 graft status                   # daemon liveness + live runner snapshot
 graft stop                     # graceful shutdown
 ```
@@ -140,8 +141,11 @@ steps, and security trade-offs.
 
 ```
 graft init                              Interactive setup: backend (Tart | Orchard tree) + profile + pools + keys
-graft arborist                          Tree-doctor: verify GitHub App auth end-to-end (no VM boot)
-graft run [--profile NAME] [--daemon] [--verbose]   Start the supervisor (live spinner; -v for full logs)
+
+graft arborist tend [--profile NAME] [--daemon] [-v] [--monitor]   Tend the pool (supervise; --monitor reports health)
+graft arborist check                    Verify GitHub App auth end-to-end (no VM boot)
+graft arborist canopy / branches / leaves   Inspect the tree (capacity, workers, VMs)
+graft arborist runners                  List / prune GitHub runner registrations
 graft status                            Show supervisor + runner state
 graft stop                              Gracefully stop a running supervisor
 
@@ -155,16 +159,16 @@ graft pool add --name N --image I --app-id A --target T [--os] [--count] [--labe
 graft pool rm <name> [--profile NAME]
 graft pool list [--profile NAME]
 
-graft image build -f <recipe.graft>     Build a golden image (declarative toolchain)
-graft image render -f <recipe.graft>    Preview the compiled provisioning script
-graft image list / rm / prune / push / pull / template   Manage images (prune clears orphaned build VMs)
-graft dev [<repo>|<box>|.] [--code]     Dev box: clone a repo / resume a box / mount '.' (docs/dev-boxes.md)
-graft dev ls / rm [box]                 List / remove dev boxes
+graft sapling grow --seed <recipe.graft>   Grow a golden image (sapling) from a .graft seed
+graft sapling render --seed <recipe.graft> Preview the compiled provisioning script
+graft sapling list / rm / prune / push / pull / template   Manage saplings (prune clears orphaned build VMs)
+graft nest [<repo>|<box>|.] [--code]    Dev box (nest): clone a repo / resume a box / mount '.' (docs/dev-boxes.md)
+graft nest ls / rm [box]                List / remove nests
 
-graft tree plant                        Plant the trunk — run the controller (foreground)
-graft tree branch <trunk-url> [--reserve N]   Graft a branch on — run a worker that joins the tree
-graft tree prune <name>                 Prune a branch — remove a worker
-graft tree status / branches / leaves   Inspect the tree (capacity, workers, VMs)
+graft plant                             Plant the trunk — run the controller (foreground)
+graft branch <trunk-url> [--reserve N] [--monitor]   Graft a branch on — run a worker that joins the tree
+graft prune <name>                      Prune a branch — remove a worker
+graft bonsai                            Grow a bonsai — a whole tiny tree on this machine (local)
 
 graft leaf create <image> [--os macos|linux]   Clone + boot a VM (leaf), print name<TAB>ip
 graft leaf rm <name>                    Stop + destroy a leaf (VM)
@@ -198,14 +202,14 @@ provisioning, grouped: **toolchain** (`node`, `ruby`, `python`, `cocoapods`, `xc
 the source — no source baked), **verification** (`verify:`), and **VM shape**
 (`cpu`/`memory`/`disk`). `network: bridged:<iface>` covers hosts where the default NAT is
 blocked (e.g. behind Zscaler). Drop to a `run:` block or `script:` for anything custom.
-`graft image template` prints a starter; the full field reference is in
+`graft sapling template` prints a starter; the full field reference is in
 [docs/images-and-caching.md](docs/images-and-caching.md).
 
 ```sh
-graft image render -f examples/images/rn-detox.graft  # preview the compiled script
-graft image build  -f examples/images/rn-detox.graft  # build the golden image
-graft dev your-org/app                                # clone into a dev box, shell in
-graft dev your-org/app --code                         # …or open VS Code inside the VM
+graft sapling render --seed examples/images/rn-detox.graft  # preview the compiled script
+graft sapling grow   --seed examples/images/rn-detox.graft  # grow the golden image (sapling)
+graft nest your-org/app                                     # clone into a nest, shell in
+graft nest your-org/app --code                              # …or open VS Code inside the VM
 ```
 
 Ready-to-adapt recipes (React Native/Detox, iOS/Fastlane, Node, script-based) live in
@@ -221,11 +225,11 @@ editor, terminal, language servers, and builds run guest-side. It's Codespaces, 
 native macOS/iOS.
 
 ```sh
-graft dev                      # picker: resume a box / clone a repo / mount here / scratch
-graft dev your-org/app         # clone → persistent box, shell in   (--code for VS Code)
-graft dev app                  # resume it
-graft dev .                    # mount $PWD → ephemeral box → run here
-graft dev ls / rm [box]        # list / remove boxes
+graft nest                     # picker: resume a box / clone a repo / mount here / scratch
+graft nest your-org/app        # clone → persistent box, shell in   (--code for VS Code)
+graft nest app                 # resume it
+graft nest .                   # mount $PWD → ephemeral box → run here
+graft nest ls / rm [box]        # list / remove boxes
 ```
 
 The model: **clone → persistent & resumable**; **mount (`.`) / scratch → ephemeral**.
@@ -254,9 +258,10 @@ passwords. Stock cirruslabs images ship the agent; custom images must include it
 
 ## Documentation
 
-- **[docs/dev-boxes.md](docs/dev-boxes.md)** — `graft dev`: clone vs mount, persistence, `--code`, the picker
+- **[docs/dev-boxes.md](docs/dev-boxes.md)** — `graft nest`: clone vs mount, persistence, `--code`, the picker
 - **[docs/images-and-caching.md](docs/images-and-caching.md)** — `.graft` recipes, the full field reference, CoW caching
 - **[docs/orchard.md](docs/orchard.md)** — the multi-host Orchard backend: controller/workers, service account, config
+- **[docs/health-and-monitoring.md](docs/health-and-monitoring.md)** — `arborist --tend`: detectors, event schema, webhooks, the self-healing seam
 - **[docs/ec2-mac-setup.md](docs/ec2-mac-setup.md)** — headless / EC2 Mac runners (auto-login, bridged networking)
 - **[editors/vscode/](editors/vscode/)** — the `.graft` VS Code extension
 
@@ -267,7 +272,7 @@ passwords. Stock cirruslabs images ship the agent; custom images must include it
 - `--unsafe-unrestricted-quota` (kernel boot-arg override, SIP off, opt-in)
 - `Twig`: native `Virtualization.framework` backend
 
-Shipped: ✅ menu-bar app (`Graft.app`); ✅ image builder + `graft dev` + `.graft` recipes (toolchain/system/cache-warming/VM-shape fields, bridged networking, repo pre-caching); ✅ `OrchardProvider` multi-host backend
+Shipped: ✅ menu-bar app (`Graft.app`); ✅ image builder + `graft nest` + `.graft` recipes (toolchain/system/cache-warming/VM-shape fields, bridged networking, repo pre-caching); ✅ `OrchardProvider` multi-host backend
 
 ## Install
 

@@ -5,22 +5,24 @@ import Foundation
 public protocol JITConfigProvider: Sendable {
     func generateJITRunner(github: GitHubConfig, labels: [String], runnerName: String) async throws -> GitHubAppClient.JITRunner
     func deleteRunner(id: Int, target: GitHubTarget) async throws
-}
-
-/// Runs the ephemeral runner in a VM and returns its exit code.
-/// `RunnerProvisioner` is the production conformer.
-public protocol RunnerRunner: Sendable {
-    func runEphemeralRunner(on vm: RunningVM, jitConfig: String, onLine: (@Sendable (String) -> Void)?) async throws -> Int32
+    /// Runners registered on `target` — the supervisor polls this to watch each leaf's
+    /// runner come online and then finish. This is how it monitors a leaf without ever
+    /// exec-ing into the guest.
+    func listRunners(target: GitHubTarget) async throws -> [GitHubAppClient.Runner]
+    /// Best-effort name of the job a runner is currently running (for the dashboard label).
+    func currentRunningJob(runnerName: String, target: GitHubTarget) async -> String?
 }
 
 extension GitHubAppClient: JITConfigProvider {}
-extension RunnerProvisioner: RunnerRunner {}
 
 /// What a runner slot is currently doing — surfaced to an optional status reporter
 /// so a live UI (the `graft run` spinner dashboard) can show per-slot progress.
 public enum RunnerPhase: Sendable {
-    case acquiring          // cloning + booting the VM
-    case provisioning       // VM booted; registering the JIT runner with GitHub
+    case acquiring          // submitted; cloning/creating the leaf
+    case waitingForCapacity // fleet has no room right now — parked, not churning a doomed acquire
+    case scheduling         // Orchard: submitted, waiting for a branch to take it (pending placement)
+    case booting            // placed/cloned; the guest is coming up
+    case provisioning       // leaf up; registering the JIT runner with GitHub
     case starting           // runner process launched, configuring inside the guest
     case connected          // connected to GitHub; configuring before it listens
     case ready              // connected + listening for jobs
@@ -32,14 +34,17 @@ public enum RunnerPhase: Sendable {
 
     public var label: String {
         switch self {
-        case .acquiring: return "booting VM"
+        case .acquiring: return "acquiring leaf"
+        case .waitingForCapacity: return "waiting for capacity"
+        case .scheduling: return "scheduling · waiting for a branch"
+        case .booting: return "booting leaf"
         case .provisioning: return "registering runner"
         case .starting: return "starting up"
         case .connected: return "connected · preparing"
         case .ready: return "ready · waiting for jobs"
         case .busy(let job): return "running job: \(job)"
         case .deregistering: return "deregistering runner"
-        case .stopping: return "stopping VM"
+        case .stopping: return "stopping leaf"
         case .retrying: return "retrying…"
         case .done: return "done"
         }
@@ -49,6 +54,9 @@ public enum RunnerPhase: Sendable {
     public var kind: String {
         switch self {
         case .acquiring: return "acquiring"
+        case .waitingForCapacity: return "waiting"
+        case .scheduling: return "scheduling"
+        case .booting: return "booting"
         case .provisioning: return "provisioning"
         case .starting: return "starting"
         case .connected: return "connected"
@@ -74,10 +82,12 @@ public actor PoolSupervisor {
     private let config: GraftConfig
     private let provider: any VMProvider
     private let github: @Sendable (Int) -> any JITConfigProvider
-    private let runner: any RunnerRunner
     private let state: StateManager
     private let status: RunnerStatusReporter?
     private var runners: [String: RunnerRecord] = [:]
+    /// Leaves re-adopted on restart (their runner was still online), queued by pool for a
+    /// slot to monitor through to completion instead of acquiring a fresh leaf.
+    private var adoptable: [String: [RunningVM]] = [:]
     /// VMs currently being torn down — so the shutdown watcher and a slot's own
     /// teardown can't both fire `tart stop`/`delete` on the same VM and wedge tart
     /// on its per-VM lock inside an un-cancellable `Shell.run`.
@@ -93,20 +103,17 @@ public actor PoolSupervisor {
         config: GraftConfig,
         provider: any VMProvider,
         github: @escaping @Sendable (Int) -> any JITConfigProvider,
-        runner: any RunnerRunner,
         state: StateManager = StateManager(),
         status: RunnerStatusReporter? = nil
     ) {
         self.config = config
         self.provider = provider
         self.github = github
-        self.runner = runner
         self.state = state
         self.status = status
     }
 
-    /// Convenience for the production path: GitHub App clients backed by `secrets`,
-    /// runner via the provider's exec channel.
+    /// Convenience for the production path: GitHub App clients backed by `secrets`.
     public init(
         config: GraftConfig,
         provider: any VMProvider,
@@ -118,7 +125,6 @@ public actor PoolSupervisor {
             config: config,
             provider: provider,
             github: { appID in GitHubAppClient(appID: appID, secrets: secrets) },
-            runner: RunnerProvisioner(provider: provider),
             state: state,
             status: status
         )
@@ -133,6 +139,14 @@ public actor PoolSupervisor {
             // target the menu-bar app shows.
             var capacityByOS: [GuestOS: Int] = [:]
             for os in GuestOS.allCases { capacityByOS[os] = await provider.capacity(for: os) }
+            // Re-adopted leaves already hold capacity but *are* the desired runners — add them
+            // back so the planner budgets a slot to reclaim each. Without this, a full fleet
+            // (0 free) plans 0 slots and the re-adopted leaves are never monitored or torn down.
+            for (poolName, leaves) in adoptable {
+                if let os = config.pools.first(where: { $0.name == poolName })?.os {
+                    capacityByOS[os, default: 0] += leaves.count
+                }
+            }
 
             for (pool, slots) in config.plannedSlots(capacity: { capacityByOS[$0] ?? 0 }) {
                 if slots < pool.count {
@@ -176,47 +190,125 @@ public actor PoolSupervisor {
 
         while !Task.isCancelled {
             do {
-                report(.acquiring)
-                let vm = try await provider.acquire(image: pool.image, os: pool.os, mounts: pool.mounts ?? [], network: pool.network ?? .nat, resources: pool.resources)
+                // Re-adopt a leaf from a prior run before acquiring a fresh one: monitor it to
+                // completion and tear it down, so a supervisor restart doesn't kill a running
+                // job (and the re-adopted leaf counts toward the pool's desired count).
+                if let adopted = claimAdoptable(pool: pool.name) {
+                    Log.info("[\(tag)] re-adopted \(adopted.name) — monitoring to completion")
+                    report(.ready, adopted.name)
+                    await monitorRunner(tag: tag, pool: pool.name, vm: adopted.name, github: github, target: try? gh.parsedTarget())
+                    report(.deregistering, adopted.name)
+                    await deregisterByName(adopted.name, poolName: pool.name)
+                    report(.stopping, adopted.name)
+                    await releaseOnce(adopted)
+                    continue
+                }
+                // Park until the fleet has room. Firing `acquire` into a 0-capacity fleet
+                // (e.g. every Orchard worker gone) just churns create→pending→timeout→delete;
+                // instead wait and resume when capacity returns. Local Tart's capacity is its
+                // fixed host ceiling (never 0), so only an Orchard fleet actually parks here.
+                while !Task.isCancelled, await provider.capacity(for: pool.os) <= 0 {
+                    report(.waitingForCapacity)
+                    try await Task.sleep(for: .seconds(15))
+                }
+                if Task.isCancelled { break }
+                let name = makeGraftVMName()
+                report(.acquiring, name)
+                // Surface the leaf's real lifecycle: scheduling (waiting for a branch) vs booting.
+                let onProgress: @Sendable (AcquireProgress) -> Void = { progress in
+                    let phase: RunnerPhase
+                    switch progress {
+                    case .scheduling: phase = .scheduling
+                    case .booting: phase = .booting
+                    }
+                    Task { await self.recordPhase(tag: tag, pool: pool.name, vm: name, phase: phase) }
+                }
+                // Mint the JIT runner FIRST: its config is embedded in the leaf's startup
+                // script, which the worker (Orchard) or local tart runs on boot. The
+                // supervisor never execs into the guest — it watches the runner on GitHub.
+                report(.provisioning, name)
+                let jit = try await github.generateJITRunner(github: gh, labels: pool.resolvedLabels(), runnerName: name)
+                let script = RunnerProvisioner.provisionScript(os: pool.os, jitConfig: jit.encodedConfig)
+
+                let vm = try await provider.acquire(name: name, image: pool.image, os: pool.os, mounts: pool.mounts ?? [], network: pool.network ?? .nat, resources: pool.resources, startupScript: script, onProgress: onProgress)
                 track(vm, pool: pool.name)
                 Log.info("[\(tag)] acquired \(vm.name) (\(vm.ip))")
 
-                var runnerID: Int?
-                do {
-                    report(.provisioning, vm.name)
-                    let jit = try await github.generateJITRunner(github: gh, labels: pool.resolvedLabels(), runnerName: vm.name)
-                    runnerID = jit.runnerID
-                    report(.starting, vm.name)
-                    let onLine = makeRunnerLineHandler(tag: tag, pool: pool.name, vm: vm.name)
-                    let exitCode = try await runner.runEphemeralRunner(on: vm, jitConfig: jit.encodedConfig, onLine: onLine)
-                    Log.info("[\(tag)] runner \(vm.name) finished (exit \(exitCode))")
-                } catch is CancellationError {
-                    Log.info("[\(tag)] runner \(vm.name) stopped (shutdown)")
-                } catch {
-                    Log.warn("[\(tag)] runner \(vm.name) failed: \(error)")
-                }
+                // Watch the runner on GitHub until its single job finishes (or it never
+                // registers within the grace window). No exec, no held stream.
+                await monitorRunner(tag: tag, pool: pool.name, vm: vm.name, github: github, target: try? gh.parsedTarget())
 
-                // Deregister from GitHub so a runner that never ran a job (e.g. killed
-                // on shutdown) doesn't linger as an offline husk. A completed job is
-                // already gone — deleteRunner 404s, which we ignore. Must survive the
-                // slot's own cancellation: on graceful shutdown the task is already
-                // cancelled here, so a plain `await` would be aborted and leak the
-                // runner — exactly the case this cleans up.
-                if let runnerID, let target = try? gh.parsedTarget() {
+                // Deregister so a runner that never ran (e.g. killed on shutdown) doesn't
+                // linger as an offline husk; a completed ephemeral runner is already gone
+                // (deleteRunner 404s, ignored). Shielded so it survives the slot's own
+                // cancellation on graceful shutdown.
+                if let target = try? gh.parsedTarget() {
                     report(.deregistering, vm.name)
-                    await deregister(runnerID: runnerID, target: target, via: github)
+                    await deregister(runnerID: jit.runnerID, target: target, via: github)
                 }
-
                 report(.stopping, vm.name)
                 await releaseOnce(vm)
             } catch {
                 if Task.isCancelled { break }
                 report(.retrying)
-                Log.warn("[\(tag)] acquire failed: \(error) — retrying in 5s")
+                Log.warn("[\(tag)] slot error: \(error) — retrying in 5s")
                 try? await Task.sleep(for: .seconds(5))
             }
         }
         report(.done)
+    }
+
+    /// How long a freshly-created leaf has to get its runner online before we give up and
+    /// replace it (covers boot + startup-script + register). Tunable later via `monitor`.
+    static let registrationDeadline: TimeInterval = 300
+    static let runnerPollInterval: Duration = .seconds(15)
+
+    /// Watch one leaf's runner on GitHub. "offline/absent" means *still starting* until the
+    /// runner has been seen online (bounded by `registrationDeadline`), after which it means
+    /// *done → replace*. GitHub unreachable = unknown → keep waiting (never abandon a possible
+    /// live job). Returns when the job is done, the runner never registers in time, or the
+    /// slot is cancelled.
+    private func monitorRunner(tag: String, pool: String, vm: String, github: any JITConfigProvider, target: GitHubTarget?) async {
+        guard let target else {
+            while !Task.isCancelled { try? await Task.sleep(for: Self.runnerPollInterval) }
+            return
+        }
+        let deadline = Date().addingTimeInterval(Self.registrationDeadline)
+        var sawOnline = false
+        while !Task.isCancelled {
+            if let runners = try? await github.listRunners(target: target) {
+                if let runner = runners.first(where: { $0.name == vm }), !runner.isOffline {
+                    sawOnline = true
+                    if runner.busy {
+                        // Tier 1: show what it's actually running (best-effort; repo targets).
+                        let job = await github.currentRunningJob(runnerName: vm, target: target)
+                        recordPhase(tag: tag, pool: pool, vm: vm, phase: .busy(job ?? "a job"))
+                    } else {
+                        recordPhase(tag: tag, pool: pool, vm: vm, phase: .ready)
+                    }
+                } else if sawOnline {
+                    Log.info("[\(tag)] runner \(vm) finished")
+                    return                      // was online, now gone → job done
+                } else if Date() > deadline {
+                    Log.warn("[\(tag)] runner \(vm) never registered within \(Int(Self.registrationDeadline))s — replacing")
+                    return                      // never came online → replace
+                } else {
+                    recordPhase(tag: tag, pool: pool, vm: vm, phase: .starting)
+                }
+            }
+            // listRunners failed (GitHub unreachable) → don't decide; keep waiting.
+            do { try await Task.sleep(for: Self.runnerPollInterval) } catch { return }
+        }
+    }
+
+    private enum RunnerLiveness { case online, offline, unknown }
+
+    /// One leaf's runner state on GitHub. Absent (not yet registered, or already
+    /// deregistered) reads as `.offline`; an API error reads as `.unknown`.
+    private func runnerLiveness(name: String, github: any JITConfigProvider, target: GitHubTarget) async -> RunnerLiveness {
+        guard let runners = try? await github.listRunners(target: target) else { return .unknown }
+        guard let runner = runners.first(where: { $0.name == name }) else { return .offline }
+        return runner.isOffline ? .offline : .online
     }
 
     /// Deregister a runner from GitHub, shielded from the caller's cancellation and
@@ -298,12 +390,15 @@ public actor PoolSupervisor {
     /// duplicate `tart stop`/`delete` that would collide on tart's per-VM lock.
     private func releaseOnce(_ vm: RunningVM) async {
         guard releasing.insert(vm.name).inserted else { return }
-        untrack(vm.name)
         do {
             try await provider.release(vm)
+            // Untrack only after a confirmed delete. If release fails (e.g. the controller
+            // is down), the VM is still running and still ours — keep it tracked so it isn't
+            // mislabeled as orphan `deadwood` (untrack-then-failed-delete was the leak), and
+            // so a later reconcile can re-adopt or re-delete it.
+            untrack(vm.name)
         } catch {
-            // Surface it — a swallowed release failure leaves a VM holding a quota slot.
-            Log.warn("release of \(vm.name) failed: \(error)")
+            Log.warn("release of \(vm.name) failed: \(error) — keeping it tracked for retry")
         }
         releasing.remove(vm.name)
     }
@@ -322,19 +417,78 @@ public actor PoolSupervisor {
 
     // MARK: Lifecycle
 
-    /// Destroy leftovers from a prior run. With `tart exec`, the watching process
-    /// died with us, so any surviving graft VM is a dead-runner husk — clean slate,
-    /// then fill fresh. (Reattach isn't meaningful without a live exec channel.)
+    /// On startup, reconcile leftover leaves from the last run against GitHub: a leaf whose
+    /// runner is still **online** is re-adopted (kept + queued for a slot to monitor through
+    /// to completion — a supervisor restart must not kill a running job); one whose runner is
+    /// **offline** is released (its job finished or it died). GitHub-unreachable ⇒ keep (never
+    /// murder a possible live job). Then sweep graft VMs the backend has that we aren't
+    /// tracking — but only ones no target shows online.
     private func reconcile() async {
         for record in state.load()?.runners ?? [] {
-            Log.info("reconcile: releasing leftover \(record.vm.name)")
-            try? await provider.release(record.vm)
+            switch await leafLiveness(record) {
+            case .offline:
+                Log.info("reconcile: releasing finished/dead leaf \(record.vm.name)")
+                await deregisterByName(record.vm.name, poolName: record.pool)
+                try? await provider.release(record.vm)
+            case .online, .unknown:
+                Log.info("reconcile: re-adopting live leaf \(record.vm.name)")
+                runners[record.vm.name] = record
+                adoptable[record.pool, default: []].append(record.vm)
+            }
         }
-        // Sweep any graft-* VMs that never made it into state (crash before persist).
-        await sweepGraftVMs()
-        runners.removeAll()
+        // Crash-before-persist orphans: sweep graft VMs we aren't tracking — but never one
+        // whose runner is still online somewhere (it may be running a real job).
+        let tracked = Set(runners.keys)
+        for name in await provider.managedVMNames() where !tracked.contains(name) {
+            if await anyTargetOnline(name: name) {
+                Log.info("reconcile: leaving live orphan \(name) (runner online)")
+            } else {
+                Log.info("reconcile: sweeping dead orphan \(name)")
+                try? await provider.release(RunningVM(name: name, ip: "", os: .macOS))
+            }
+        }
         slots.removeAll()
         persist()
+    }
+
+    /// Pop one leaf queued for re-adoption in `pool`, if any (a slot claims it to monitor).
+    private func claimAdoptable(pool: String) -> RunningVM? {
+        guard var queue = adoptable[pool], !queue.isEmpty else { return nil }
+        let vm = queue.removeFirst()
+        adoptable[pool] = queue.isEmpty ? nil : queue
+        return vm
+    }
+
+    /// Liveness of a leftover leaf's GitHub runner, resolved via its pool's GitHub config.
+    private func leafLiveness(_ record: RunnerRecord) async -> RunnerLiveness {
+        guard let pool = config.pools.first(where: { $0.name == record.pool }),
+              let gh = config.gitHub(for: pool),
+              let target = try? gh.parsedTarget() else { return .unknown }
+        return await runnerLiveness(name: record.vm.name, github: github(gh.appId), target: target)
+    }
+
+    /// True if any distinct pool target shows a runner named `name` online — so we don't
+    /// sweep a live orphan we can't otherwise map back to a pool.
+    private func anyTargetOnline(name: String) async -> Bool {
+        var seen = Set<String>()
+        for pool in config.pools {
+            guard let gh = config.gitHub(for: pool), let target = try? gh.parsedTarget(),
+                  seen.insert("\(gh.appId)|\(gh.target)").inserted else { continue }
+            if case .online = await runnerLiveness(name: name, github: github(gh.appId), target: target) { return true }
+        }
+        return false
+    }
+
+    /// Deregister a leaf's GitHub runner by name (we don't have the runnerID for re-adopted
+    /// or reconciled leaves). Looks it up via the pool's GitHub config, then deletes by id —
+    /// so a husk doesn't linger after we tear the leaf down. No-op if it's already gone.
+    private func deregisterByName(_ name: String, poolName: String) async {
+        guard let pool = config.pools.first(where: { $0.name == poolName }),
+              let gh = config.gitHub(for: pool),
+              let target = try? gh.parsedTarget(),
+              let runners = try? await github(gh.appId).listRunners(target: target),
+              let runner = runners.first(where: { $0.name == name }) else { return }
+        await deregister(runnerID: runner.id, target: target, via: github(gh.appId))
     }
 
     /// Stop every tracked VM — the reliable lever for breaking a slot blocked in

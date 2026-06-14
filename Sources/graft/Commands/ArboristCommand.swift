@@ -2,17 +2,36 @@ import ArgumentParser
 import Foundation
 import GraftCore
 
-/// `graft arborist` — the tree-doctor: verify the whole GitHub App auth chain against
-/// the real API without booting a VM: read key → sign JWT → find installation → mint
-/// token → create a probe JIT runner → delete it. Leaves no trace on the org.
+/// `graft arborist` — the caretaker. Everything operational routes through here:
 ///
-/// Run it bare and it picks the App from the keys in your keychain and prompts for
-/// the target; or pass `--app-id`/`--target` to skip the prompts; or `--config`/
-/// `--pool` to check pools from a config file.
+///   graft arborist tend       supervise the pool (+ --monitor to report health)
+///   graft arborist check      verify the GitHub App auth chain (no VM boot)
+///   graft arborist canopy     at-a-glance tree overview
+///   graft arborist leaves     list leaves (VMs)
+///   graft arborist branches   list branches (workers)
+///   graft arborist runners    list / prune GitHub runners
+///
+/// A parent command — run a subcommand. (`Run` registers here as `tend`, `Tree.Status`
+/// as `canopy`; the structs live in their own files.)
 struct Arborist: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "arborist",
-        abstract: "Tree-doctor: verify the GitHub App auth chain end-to-end (no VM boot)."
+        abstract: "Tend the tree — supervise, check, and inspect.",
+        subcommands: [Run.self, Check.self, Tree.Status.self, Tree.Branches.self, Tree.Leaves.self, Runners.self]
+    )
+}
+
+/// `graft arborist check` — verify the whole GitHub App auth chain against the real API
+/// without booting a VM: read key → sign JWT → find installation → mint token → create a
+/// probe JIT runner → delete it. Leaves no trace on the org.
+///
+/// Run it bare and it picks the App from the keys in your keychain and prompts for the
+/// target; or pass `--app-id`/`--target` to skip the prompts; or `--config`/`--pool` to
+/// check pools from a config file.
+struct Check: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "check",
+        abstract: "Verify the GitHub App auth chain end-to-end (no VM boot)."
     )
 
     @Option(name: .long, help: "GitHub App ID for a one-off check (default: check the active profile's pools).")
@@ -116,8 +135,8 @@ struct Arborist: AsyncParsableCommand {
 
     // MARK: Interactive pickers
 
-    /// Choose an App ID from the keys stored in the keychain. Auto-selects when
-    /// there's only one. Listing reads attributes only — no Keychain prompt here.
+    /// Choose an App ID from the keys stored in the keychain. Auto-selects when there's
+    /// only one. Listing reads attributes only — no Keychain prompt here.
     private static func pickAppID(scope: KeychainScope) throws -> Int {
         let ids = try KeychainSecretStore(scope: scope).storedAppIDs()
         guard !ids.isEmpty else {

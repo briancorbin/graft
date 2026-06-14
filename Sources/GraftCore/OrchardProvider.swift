@@ -62,16 +62,25 @@ public struct OrchardProvider: VMProvider {
         return min(report.freeSlots, maxVMs)
     }
 
-    public func acquire(image: String, os: GuestOS, mounts: [Mount] = [], network: VMNetwork = .nat, resources: VMResources = .none) async throws -> RunningVM {
-        let name = Self.namePrefix + UUID().uuidString.lowercased()
-        let args = Self.createArgs(name: name, image: image, os: os, mounts: mounts, network: network, resources: resources)
+    public func acquire(name: String, image: String, os: GuestOS, mounts: [Mount], network: VMNetwork, resources: VMResources, startupScript: String?, onProgress: (@Sendable (AcquireProgress) -> Void)?) async throws -> RunningVM {
+        // Hand the runner bootstrap to the VM at create time via Orchard's StartupScript —
+        // the *worker* (local to the VM) runs it once the guest is up. We never exec in.
+        var scriptPath: String?
+        if let startupScript {
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("graft-startup-\(name).sh")
+            try startupScript.write(to: url, atomically: true, encoding: .utf8)
+            scriptPath = url.path
+        }
+        let args = Self.createArgs(name: name, image: image, os: os, mounts: mounts, network: network, resources: resources, startupScriptPath: scriptPath)
 
         let created = try await Shell.run(Self.executable, args, environment: env, timeout: .seconds(30))
+        if let scriptPath { try? FileManager.default.removeItem(atPath: scriptPath) }
         guard created.succeeded else {
             throw GraftError("`orchard create vm` failed: \(Self.message(created))")
         }
+        onProgress?(.scheduling)   // submitted — the controller now has to place it on a branch
         do {
-            let worker = try await waitForRunning(name)
+            let worker = try await waitForRunning(name, onProgress: onProgress)
             return RunningVM(name: name, ip: worker, os: os)
         } catch {
             // Don't leak a scheduled-but-doomed VM.
@@ -134,6 +143,11 @@ public struct OrchardProvider: VMProvider {
         }
     }
 
+    public func managedVMNames() async -> [String] {
+        guard let listing = try? await rawList("vms") else { return [] }
+        return Self.graftVMNames(in: listing)
+    }
+
     /// Pull graft's own VM names out of `orchard list vms` table output — the name is the
     /// first whitespace-delimited column; the `Name` header and other rows are filtered out.
     static func graftVMNames(in listing: String) -> [String] {
@@ -151,9 +165,18 @@ public struct OrchardProvider: VMProvider {
         public let name: String
         public let paused: Bool
         public let slots: Int
-        public init(name: String, paused: Bool, slots: Int) {
-            self.name = name; self.paused = paused; self.slots = slots
+        /// Seconds since this worker last heartbeated to the controller; nil if unknown.
+        public let lastSeenAge: TimeInterval?
+        public init(name: String, paused: Bool, slots: Int, lastSeenAge: TimeInterval? = nil) {
+            self.name = name; self.paused = paused; self.slots = slots; self.lastSeenAge = lastSeenAge
         }
+
+        /// A worker not seen within this window is a ghost — dead, but not yet reaped by the
+        /// controller (which keeps counting its slots until heartbeat timeout). Excluding it
+        /// keeps a killed worker from inflating capacity. Comfortably above any sane heartbeat
+        /// interval, so a live worker is never false-flagged.
+        public static let staleThreshold: TimeInterval = 120
+        public var isStale: Bool { (lastSeenAge ?? 0) > Self.staleThreshold }
     }
 
     /// A live snapshot of the fleet: workers (with advertised slots), how many VMs are
@@ -164,8 +187,10 @@ public struct OrchardProvider: VMProvider {
         public let workers: [OrchardWorker]
         public let usedVMs: Int
         public let graftVMNames: [String]
-        /// Slots advertised by the workers that can actually take a VM right now.
-        public var totalSlots: Int { workers.filter { !$0.paused }.reduce(0) { $0 + $1.slots } }
+        /// Slots advertised by workers that can actually take a VM right now — excludes
+        /// paused workers *and* ghosts (stale heartbeat), so a dead worker the controller
+        /// hasn't reaped doesn't inflate capacity.
+        public var totalSlots: Int { workers.filter { !$0.paused && !$0.isStale }.reduce(0) { $0 + $1.slots } }
         /// Free `tart-vms` slots across the fleet: advertised minus every VM already
         /// placed (graft's and anyone else's — they all consume host slots).
         public var freeSlots: Int { max(0, totalSlots - usedVMs) }
@@ -180,7 +205,14 @@ public struct OrchardProvider: VMProvider {
         var workers: [OrchardWorker] = []
         for (name, paused) in Self.workerRows(in: workersRaw) {
             let slots = Self.tartVMSlots(inWorkerDetail: try await runOrchard(["get", "worker", name])) ?? 0
-            workers.append(OrchardWorker(name: name, paused: paused, slots: slots))
+            // Absolute last-heartbeat via structpath (the table shows only a relative
+            // "2 minutes ago"). A worker not seen recently is a ghost the controller hasn't
+            // reaped — exclude its slots from capacity.
+            let lastSeenRaw = try? await runOrchard(["get", "worker", "\(name)/lastSeen"])
+            let age = lastSeenRaw.flatMap {
+                Self.lastSeenAge(from: $0.trimmingCharacters(in: .whitespacesAndNewlines), now: Date())
+            }
+            workers.append(OrchardWorker(name: name, paused: paused, slots: slots, lastSeenAge: age))
         }
         let vmsRaw = try await runOrchard(["list", "vms"])
         return FleetReport(
@@ -240,6 +272,23 @@ public struct OrchardProvider: VMProvider {
         return nil
     }
 
+    /// Age in seconds of an orchard worker `lastSeen` timestamp (Go's `time.String()`
+    /// format, e.g. "2026-06-13 07:33:32.148021 -0700 PDT"). Robust by design: parses only
+    /// the date + whole-second time + numeric offset, dropping the fractional seconds and
+    /// the zone abbreviation (which `DateFormatter` handles poorly). nil if unparseable.
+    static func lastSeenAge(from raw: String, now: Date) -> TimeInterval? {
+        let tokens = raw.split(separator: " ")
+        guard tokens.count >= 3 else { return nil }
+        let day = String(tokens[0])
+        let time = tokens[1].split(separator: ".").first.map(String.init) ?? String(tokens[1])
+        let offset = String(tokens[2])
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss Z"
+        guard let date = formatter.date(from: "\(day) \(time) \(offset)") else { return nil }
+        return now.timeIntervalSince(date)
+    }
+
     /// Count of VMs currently on the controller (all of them — every Tart VM consumes a
     /// host slot), from `orchard list vms` table output. Header row excluded.
     static func vmCount(in listing: String) -> Int {
@@ -252,8 +301,23 @@ public struct OrchardProvider: VMProvider {
 
     // MARK: Argument building (pure — unit-tested)
 
+    /// `--resources` flags for `orchard worker run` when graft overrides a worker's advertised
+    /// capacity. Orchard's `--resources` *replaces* the auto-detected set, so we re-state all
+    /// three (leaf slots, memory, cores) whenever `leaves` or `reserve` is given. Returns []
+    /// when neither is set — let the worker auto-detect (2 macOS slots on Apple Silicon).
+    public static func workerResourceArgs(leaves: Int?, reserve: Int?, totalMB: Int, cores: Int) -> [String] {
+        guard leaves != nil || reserve != nil else { return [] }
+        let mib = max(1024, totalMB - (reserve ?? 0) * 1024)
+        let slots = leaves ?? 2
+        return [
+            "--resources", "org.cirruslabs.tart-vms=\(slots)",
+            "--resources", "org.cirruslabs.memory-mib=\(mib)",
+            "--resources", "org.cirruslabs.logical-cores=\(cores)",
+        ]
+    }
+
     /// The full `orchard create vm …` argv for an ephemeral runner VM.
-    static func createArgs(name: String, image: String, os: GuestOS, mounts: [Mount], network: VMNetwork, resources: VMResources = .none) -> [String] {
+    static func createArgs(name: String, image: String, os: GuestOS, mounts: [Mount], network: VMNetwork, resources: VMResources = .none, startupScriptPath: String? = nil) -> [String] {
         // No --restart-policy: Orchard already defaults to "Never" (never auto-restart),
         // which is what ephemeral runners want. Passing it is fragile — the API only
         // accepts the capitalized "Never" and rejects the lowercase form.
@@ -271,6 +335,7 @@ public struct OrchardProvider: VMProvider {
         }
         for mount in mounts { args += ["--host-dirs", mount.tartDirArg] }
         args += network.orchardFlags
+        if let startupScriptPath { args += ["--startup-script", "@\(startupScriptPath)"] }
         args.append(name)
         return args
     }
@@ -293,13 +358,15 @@ public struct OrchardProvider: VMProvider {
     private func waitForRunning(
         _ name: String,
         timeout: Duration = .seconds(600),
-        pollInterval: Duration = .seconds(3)
+        pollInterval: Duration = .seconds(3),
+        onProgress: (@Sendable (AcquireProgress) -> Void)? = nil
     ) async throws -> String {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: timeout)
         while clock.now < deadline {
             switch (try? await field(name, "status"))?.lowercased() ?? "" {
             case "running":
+                onProgress?(.booting)   // a branch took it — the guest is now coming up
                 let worker = try? await field(name, "worker")
                 return (worker?.isEmpty == false) ? worker! : "orchard"
             case "failed":

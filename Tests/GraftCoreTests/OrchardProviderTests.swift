@@ -13,6 +13,49 @@ struct OrchardProviderTests {
         ))
     }
 
+    // MARK: worker resource args
+
+    @Test("workerResourceArgs: empty unless leaves/reserve set; re-states all three when overriding")
+    func workerResourceArgs() {
+        #expect(OrchardProvider.workerResourceArgs(leaves: nil, reserve: nil, totalMB: 24576, cores: 12).isEmpty)
+
+        let leaves = OrchardProvider.workerResourceArgs(leaves: 1, reserve: nil, totalMB: 24576, cores: 12)
+        #expect(leaves.contains("org.cirruslabs.tart-vms=1"))
+        #expect(leaves.contains("org.cirruslabs.memory-mib=24576"))   // no reserve → full RAM
+        #expect(leaves.contains("org.cirruslabs.logical-cores=12"))
+
+        let reserve = OrchardProvider.workerResourceArgs(leaves: nil, reserve: 4, totalMB: 24576, cores: 12)
+        #expect(reserve.contains("org.cirruslabs.tart-vms=2"))        // default slots
+        #expect(reserve.contains("org.cirruslabs.memory-mib=20480"))  // 24576 − 4096
+    }
+
+    // MARK: stale workers
+
+    @Test("lastSeenAge parses the orchard Go timestamp and ages it against now")
+    func lastSeenAge() {
+        let iso = ISO8601DateFormatter()
+        let seen = iso.date(from: "2026-06-13T14:33:32Z")!          // == 07:33:32 -0700
+        let now = seen.addingTimeInterval(120)
+        let age = OrchardProvider.lastSeenAge(from: "2026-06-13 07:33:32.148021 -0700 PDT", now: now)
+        #expect(age != nil && abs(age! - 120) < 1)
+        #expect(OrchardProvider.lastSeenAge(from: "not a timestamp", now: now) == nil)
+    }
+
+    @Test("totalSlots excludes paused and stale (ghost) workers")
+    func totalSlotsExcludesGhosts() {
+        let report = OrchardProvider.FleetReport(
+            controllerURL: "x",
+            workers: [
+                .init(name: "live", paused: false, slots: 2, lastSeenAge: 10),
+                .init(name: "ghost", paused: false, slots: 2, lastSeenAge: 600),   // dead, not reaped
+                .init(name: "paused", paused: true, slots: 2, lastSeenAge: 5),
+                .init(name: "unknown", paused: false, slots: 2, lastSeenAge: nil),  // nil → treated live
+            ],
+            usedVMs: 0, graftVMNames: [])
+        #expect(report.totalSlots == 4)   // live + unknown; ghost & paused excluded
+        #expect(report.workers.first(where: { $0.name == "ghost" })?.isStale == true)
+    }
+
     // MARK: create args
 
     @Test("create args: macOS maps to --os darwin, name last, no restart-policy (Orchard defaults to Never)")

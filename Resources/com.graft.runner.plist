@@ -23,7 +23,8 @@
     <key>ProgramArguments</key>
     <array>
         <string>/usr/local/bin/graft</string>
-        <string>run</string>
+        <string>arborist</string>
+        <string>tend</string>
         <string>--config</string>
         <string>/etc/graft/config.json</string>
         <string>--daemon</string>

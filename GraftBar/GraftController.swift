@@ -69,7 +69,7 @@ final class GraftController: ObservableObject {
         let target = currentTarget()
         actionNote = target > 0 ? "Booting runners… 0/\(target)" : "Starting…"
         let log = NSHomeDirectory() + "/.graft/graft.log"
-        runShell("nohup '\(graft)' run --daemon >> '\(log)' 2>&1 &")
+        runShell("nohup '\(graft)' arborist tend --daemon >> '\(log)' 2>&1 &")
         pollFill(token: token, target: target, attemptsRemaining: 360)
     }
 

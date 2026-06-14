@@ -27,6 +27,9 @@ private actor Recorder {
 
     private(set) var deregisteredRunnerIDs: [Int] = []
     func deregister(_ id: Int) { deregisteredRunnerIDs.append(id) }
+
+    private(set) var minted: [String] = []
+    func mint(_ name: String) { minted.append(name) }
 }
 
 private struct MockProvider: VMProvider {
@@ -35,8 +38,7 @@ private struct MockProvider: VMProvider {
 
     func capacity(for os: GuestOS) async -> Int { os == .macOS ? macCapacity : 4 }
 
-    func acquire(image: String, os: GuestOS, mounts: [Mount], network: VMNetwork, resources: VMResources) async throws -> RunningVM {
-        let name = "graft-mock-" + UUID().uuidString.prefix(8).lowercased()
+    func acquire(name: String, image: String, os: GuestOS, mounts: [Mount], network: VMNetwork, resources: VMResources, startupScript: String?, onProgress: (@Sendable (AcquireProgress) -> Void)?) async throws -> RunningVM {
         await recorder.acquire(name)
         return RunningVM(name: name, ip: "10.0.0.2", os: os)
     }
@@ -57,8 +59,9 @@ private struct MockProvider: VMProvider {
 private struct MockJIT: JITConfigProvider {
     let recorder: Recorder
     func generateJITRunner(github: GitHubConfig, labels: [String], runnerName: String) async throws -> GitHubAppClient.JITRunner {
+        await recorder.mint(runnerName)
         // Stable per-name id so the deregister assertion is deterministic.
-        GitHubAppClient.JITRunner(runnerID: abs(runnerName.hashValue % 1_000_000), encodedConfig: "jit-\(runnerName)")
+        return GitHubAppClient.JITRunner(runnerID: abs(runnerName.hashValue % 1_000_000), encodedConfig: "jit-\(runnerName)")
     }
     func deleteRunner(id: Int, target: GitHubTarget) async throws {
         // Simulate a cancellation-aware network call (URLSession throws when its task
@@ -67,15 +70,12 @@ private struct MockJIT: JITConfigProvider {
         try Task.checkCancellation()
         await recorder.deregister(id)
     }
-}
-
-/// Holds the VM (one job in flight) until the slot is cancelled, so each slot
-/// acquires exactly one VM — making counts deterministic.
-private struct BlockingRunner: RunnerRunner {
-    func runEphemeralRunner(on vm: RunningVM, jitConfig: String, onLine: (@Sendable (String) -> Void)?) async throws -> Int32 {
-        while !Task.isCancelled { try? await Task.sleep(for: .milliseconds(20)) }
-        return 0
+    /// Every minted runner reads as online — so each slot sees its runner come up and then
+    /// holds (polling) until shutdown, mirroring the old BlockingRunner.
+    func listRunners(target: GitHubTarget) async throws -> [GitHubAppClient.Runner] {
+        (await recorder.minted).map { GitHubAppClient.Runner(id: 0, name: $0, status: "online", busy: false) }
     }
+    func currentRunningJob(runnerName: String, target: GitHubTarget) async -> String? { nil }
 }
 
 // MARK: - Tests
@@ -108,7 +108,6 @@ struct PoolSupervisorTests {
             config: cfg,
             provider: provider,
             github: { _ in MockJIT(recorder: recorder) },
-            runner: BlockingRunner(),
             state: StateManager(directory: stateDir)
         )
 
@@ -147,5 +146,44 @@ struct PoolSupervisorTests {
         // State is cleaned up.
         let persisted = StateManager(directory: stateDir).load()
         #expect(persisted?.runners.isEmpty ?? true)
+    }
+
+    @Test("re-adopts a still-online leaf from a prior run instead of re-acquiring")
+    func reAdoptsLiveLeaf() async throws {
+        let recorder = Recorder()
+        let provider = MockProvider(recorder: recorder, macCapacity: 2)
+        let stateDir = tempStateDir()
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        // Seed state as if a prior run left one leaf for pool "mac", and mark its runner
+        // minted so the mock GitHub reports it online (still live).
+        let leaf = RunningVM(name: "graft-leftover-1", ip: "10.0.0.9", os: .macOS)
+        let state = StateManager(directory: stateDir)
+        try state.save(PoolState(runners: [RunnerRecord(vm: leaf, pool: "mac", startedAt: Date())],
+                                 slots: [], updatedAt: Date()))
+        await recorder.mint(leaf.name)
+
+        let cfg = GraftConfig(pools: [
+            PoolConfig(name: "mac", image: "i", os: .macOS, count: 1,
+                       github: GitHubConfig(appId: 1, target: "org:acme")),
+        ])
+        let supervisor = PoolSupervisor(
+            config: cfg, provider: provider,
+            github: { _ in MockJIT(recorder: recorder) },
+            state: state)
+        let task = Task { await supervisor.run() }
+
+        // The leftover leaf is re-adopted (tracked again), not re-acquired.
+        for _ in 0..<300 {
+            if (state.load()?.runners.contains { $0.vm.name == leaf.name }) == true { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect((state.load()?.runners.contains { $0.vm.name == leaf.name }) == true)
+        #expect(await recorder.acquired.isEmpty)   // the slot adopted it — no fresh acquire
+
+        // On shutdown the adopted leaf is torn down.
+        task.cancel()
+        await task.value
+        #expect(await recorder.released.contains(leaf.name))
     }
 }

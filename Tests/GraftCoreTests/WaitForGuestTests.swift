@@ -13,8 +13,8 @@ struct WaitForGuestTests {
         init(everReady: Bool) { self.everReady = everReady }
 
         func capacity(for os: GuestOS) async -> Int { 2 }
-        func acquire(image: String, os: GuestOS, mounts: [Mount], network: VMNetwork, resources: VMResources) async throws -> RunningVM {
-            RunningVM(name: "x", ip: "", os: os)
+        func acquire(name: String, image: String, os: GuestOS, mounts: [Mount], network: VMNetwork, resources: VMResources, startupScript: String?, onProgress: (@Sendable (AcquireProgress) -> Void)?) async throws -> RunningVM {
+            RunningVM(name: name, ip: "", os: os)
         }
         func release(_ vm: RunningVM) async throws {}
         func exec(on vm: RunningVM, _ command: [String], timeout: Duration?) async throws -> ShellResult {

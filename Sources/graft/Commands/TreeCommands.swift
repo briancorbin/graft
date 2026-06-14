@@ -11,8 +11,8 @@ import GraftCore
 struct Tree: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "tree",
-        abstract: "Plant, tend, and inspect the tree — trunk, branches, and leaves.",
-        subcommands: [Plant.self, Branch.self, Prune.self, Status.self, Branches.self, Leaves.self]
+        abstract: "Inspect the tree — trunk, branches, and leaves.",
+        subcommands: [Status.self, Branches.self, Leaves.self]
     )
 }
 
@@ -75,6 +75,22 @@ extension Tree {
         }
         return OrchardProvider(config: orchard)
     }
+
+    /// Start a detection-only host-vitals monitor alongside a long-running tree process (a
+    /// branch worker or the trunk controller). Sink/webhook config comes from the active
+    /// profile when there is one, else defaults. Returns the task so the caller cancels it
+    /// when the orchard process exits.
+    static func startHostMonitor(_ detectors: [any HealthDetector], profile: String? = nil) -> Task<Void, Never> {
+        let mon = ((try? resolveProfileName(profile)).flatMap { try? Profiles.load($0) })?.monitor ?? MonitorConfig()
+        let reporter = HealthReporter(sinks: HealthMonitorFactory.sinks(monitor: mon))
+        let heartbeat = mon.heartbeatSeconds
+        let monitor = HealthMonitor(
+            detectors: detectors, reporter: reporter,
+            interval: .seconds(mon.intervalSeconds),
+            heartbeatSeconds: heartbeat > 0 ? TimeInterval(heartbeat) : nil)
+        printErr(ANSI.dim("    tending: \(detectors.count) host detectors, \(mon.webhooks.count) webhook(s) — detection-only"))
+        return Task { await monitor.run() }
+    }
 }
 
 // MARK: - graft tree status / branches / leaves
@@ -82,7 +98,7 @@ extension Tree {
 extension Tree {
     /// One-glance tree health: trunk, branch count, free capacity, graft's leaves.
     struct Status: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(abstract: "Show tree health (trunk, branches, free capacity).")
+        static let configuration = CommandConfiguration(commandName: "canopy", abstract: "Canopy — at-a-glance tree overview (trunk, branches, free capacity).")
 
         @Option(name: .long, help: "Profile to read (default: active profile).")
         var profile: String?
@@ -90,8 +106,14 @@ extension Tree {
         func run() async throws {
             let report = try await Tree.provider(profile: profile).report()
             let paused = report.workers.filter(\.paused).count
+            let stale = report.workers.filter(\.isStale).count
+            let live = report.workers.count - stale
+            var notes: [String] = []
+            if stale > 0 { notes.append("\(stale) stale") }
+            if paused > 0 { notes.append("\(paused) paused") }
+            let branchNotes = notes.isEmpty ? "" : "  (" + notes.joined(separator: ", ") + ")"
             print("trunk:     \(report.controllerURL)")
-            print("branches:  \(report.workers.count)\(paused > 0 ? "  (\(paused) paused)" : "")")
+            print("branches:  \(live)\(stale > 0 ? " live" : "")\(branchNotes)")
             print("capacity:  \(report.totalSlots) slots · \(report.usedVMs) used · \(report.freeSlots) free")
             print("leaves:    \(report.graftVMNames.count)")
         }
@@ -113,7 +135,8 @@ extension Tree {
             let width = report.workers.map { $0.name.count }.max() ?? 8
             print("\(pad("BRANCH", width))  PAUSED  LEAVES")
             for w in report.workers {
-                print("\(pad(w.name, width))  \(pad(w.paused ? "yes" : "no", 6))  \(w.slots)")
+                let stale = w.isStale ? ANSI.yellow("  ⚠ stale (no heartbeat)") : ""
+                print("\(pad(w.name, width))  \(pad(w.paused ? "yes" : "no", 6))  \(w.slots)\(stale)")
             }
             printErr(ANSI.dim("— tree: \(report.freeSlots) free / \(report.totalSlots) slots (\(report.usedVMs) used)"))
         }
@@ -153,6 +176,25 @@ extension Tree {
 // MARK: - graft tree plant / branch / prune  (trunk + branch lifecycle)
 
 extension Tree {
+    /// Run the controller in the foreground, echoing its logs (optionally prefixed) and
+    /// capturing the one-time bootstrap-admin token so `branch`/`prune` can authenticate.
+    /// Shared by `plant` and `bonsai`.
+    static func runController(dataDir: String, prefix: String = "") async throws -> Int32 {
+        let tokenFile = adminTokenFile
+        return try await Shell.runStreaming(
+            "orchard",
+            ["controller", "run", "--insecure-no-tls", "--insecure-ssh-no-client-auth", "--data-dir", dataDir],
+            onLine: { line in
+                FileHandle.standardError.write(Data((prefix + line + "\n").utf8))
+                let clean = stripANSI(line)
+                if let r = clean.range(of: "Service account token:") {
+                    let tok = clean[r.upperBound...].trimmingCharacters(in: .whitespaces)
+                    if !tok.isEmpty { try? tok.write(toFile: tokenFile, atomically: true, encoding: .utf8) }
+                }
+            }
+        )
+    }
+
     /// Plant the trunk: run the controller in the foreground. On first run the controller
     /// prints a one-time `bootstrap-admin` token — we capture it so `branch`/`prune` can
     /// authenticate. (HTTP-only for now; TLS is a future option.)
@@ -162,26 +204,46 @@ extension Tree {
         @Option(name: .long, help: "Controller data directory (state + accounts persist here).")
         var dataDir: String = Tree.dataDir
 
-        @Flag(name: .long, help: "Bonsai: a tiny local tree — trunk + one branch on this machine (for testing).")
-        var bonsai = false
+        @Flag(name: .long, help: "Also report this trunk's host vitals + controller-responding health to the webhook/logs.")
+        var monitor = false
 
         func run() async throws {
             try await Tree.requireOrchard()
             try? FileManager.default.createDirectory(atPath: dataDir, withIntermediateDirectories: true)
-            if bonsai { try await plantBonsai(); return }
+
+            // Optional controller-host monitor: disk/memory + is the controller answering?
+            let monitorTask: Task<Void, Never>? = monitor ? Tree.startHostMonitor(
+                HealthMonitorFactory.controllerDetectors(name: ProcessInfo.processInfo.hostName, responding: {
+                    // Token is captured a beat after the controller starts — treat "not yet" as healthy.
+                    guard let env = try? Tree.adminEnv(url: "http://127.0.0.1:6120") else { return true }
+                    return ((try? await Shell.run("orchard", ["list", "workers"], environment: env, timeout: .seconds(10)))?.succeeded) ?? false
+                })) : nil
+            defer { monitorTask?.cancel() }
 
             printErr(ANSI.green("🕳  digging a hole…"))
             printErr(ANSI.green("🌱  planting the trunk…") + ANSI.dim("   (Ctrl-C to stop)"))
             printErr(ANSI.dim("    data: \(dataDir)\n"))
-            let code = try await runTrunk()
+            let code = try await Tree.runController(dataDir: dataDir)
             if code != 0 { throw ExitCode(code) }
         }
+    }
 
-        /// A **bonsai** — a tiny self-contained tree: the trunk plus one branch, both on
-        /// this machine, for local testing. Runs them as separate processes (not the
-        /// wedge-prone fused `orchard dev`): the trunk in the foreground, a branch grafted
-        /// on in the background once the trunk is up. Ctrl-C stops both (shared group).
-        private func plantBonsai() async throws {
+    /// Grow a bonsai — a complete tiny tree (trunk + one branch) on THIS machine, for local
+    /// testing. Separate orchard processes (not the wedge-prone fused `orchard dev`): the
+    /// trunk foreground, a branch grafted on in the background once the trunk is up. Ctrl-C
+    /// stops both. A bonsai is a quick sandbox, not a role — so it isn't tended; to monitor a
+    /// local setup, run `graft tree plant --tend` and `graft tree branch --tend` separately.
+    struct Bonsai: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Grow a bonsai — a whole tiny tree (trunk + branch) on this machine, for local testing.")
+
+        @Option(name: .long, help: "Controller data directory (state + accounts persist here).")
+        var dataDir: String = Tree.dataDir
+
+        func run() async throws {
+            try await Tree.requireOrchard()
+            try? FileManager.default.createDirectory(atPath: dataDir, withIntermediateDirectories: true)
+
             printErr(ANSI.green("🪴  potting a bonsai — a local trunk + branch…") + ANSI.dim("   (Ctrl-C to stop)\n"))
             let url = "http://127.0.0.1:6120"
             let tokenFile = Tree.adminTokenFile
@@ -207,27 +269,9 @@ extension Tree {
             defer { branch.cancel() }
 
             printErr(ANSI.green("🕳  digging a hole… 🌱 planting the trunk…\n"))
-            let code = try await runTrunk(prefix: "[trunk] ")
+            let code = try await Tree.runController(dataDir: dataDir, prefix: "[trunk] ")
             branch.cancel()
             if code != 0 { throw ExitCode(code) }
-        }
-
-        /// Run the controller in the foreground, echoing its logs (optionally prefixed) and
-        /// capturing the one-time bootstrap-admin token so `branch`/`prune` can authenticate.
-        private func runTrunk(prefix: String = "") async throws -> Int32 {
-            let tokenFile = Tree.adminTokenFile
-            return try await Shell.runStreaming(
-                "orchard",
-                ["controller", "run", "--insecure-no-tls", "--insecure-ssh-no-client-auth", "--data-dir", dataDir],
-                onLine: { line in
-                    FileHandle.standardError.write(Data((prefix + line + "\n").utf8))
-                    let clean = Tree.stripANSI(line)
-                    if let r = clean.range(of: "Service account token:") {
-                        let tok = clean[r.upperBound...].trimmingCharacters(in: .whitespaces)
-                        if !tok.isEmpty { try? tok.write(toFile: tokenFile, atomically: true, encoding: .utf8) }
-                    }
-                }
-            )
         }
     }
 
@@ -251,6 +295,12 @@ extension Tree {
         @Option(name: .long, help: "Reserve N GB of host RAM: advertise (total − N) to the scheduler so leaves can't OOM the host.")
         var reserve: Int?
 
+        @Option(name: .long, help: "How many leaves this branch can hold (org.cirruslabs.tart-vms). Default: the host's auto-detected ceiling (2 on macOS). Use --leaves 1 per branch if running two branches on one Mac.")
+        var leaves: Int?
+
+        @Flag(name: .long, help: "Also report this branch's host vitals (disk/memory/tart) to the webhook/logs.")
+        var monitor = false
+
         func run() async throws {
             try await Tree.requireOrchard()
             printErr(ANSI.green("🌿  grafting a branch onto \(url)…"))
@@ -261,16 +311,20 @@ extension Tree {
             if let labels {
                 for kv in labels.split(separator: ",") { args += ["--labels", kv.trimmingCharacters(in: .whitespaces)] }
             }
-            if let reserve {
-                // Advertise (RAM − reserve) so the scheduler keeps a host buffer. Re-state
-                // the auto-detected resources too so overriding memory doesn't drop them.
-                let totalMB = Int(ProcessInfo.processInfo.physicalMemory / (1024 * 1024))
-                let mib = max(1024, totalMB - reserve * 1024)
-                args += ["--resources", "org.cirruslabs.memory-mib=\(mib)"]
-                args += ["--resources", "org.cirruslabs.tart-vms=2"]
-                args += ["--resources", "org.cirruslabs.logical-cores=\(ProcessInfo.processInfo.activeProcessorCount)"]
-                printErr(ANSI.dim("    advertising \(mib) MB (reserving \(reserve) GB for the host)"))
+            let resourceArgs = OrchardProvider.workerResourceArgs(
+                leaves: leaves, reserve: reserve,
+                totalMB: Int(ProcessInfo.processInfo.physicalMemory / (1024 * 1024)),
+                cores: ProcessInfo.processInfo.activeProcessorCount)
+            args += resourceArgs
+            if !resourceArgs.isEmpty {
+                let reserveNote = reserve.map { " · reserving \($0) GB" } ?? ""
+                printErr(ANSI.dim("    advertising \(leaves ?? 2) leaf slot(s)\(reserveNote)"))
             }
+            let monitorTask: Task<Void, Never>? = monitor
+                ? Tree.startHostMonitor(HealthMonitorFactory.branchDetectors(name: name ?? ProcessInfo.processInfo.hostName))
+                : nil
+            defer { monitorTask?.cancel() }
+
             printErr(ANSI.dim("    branch live — Ctrl-C to drop it.\n"))
             let code = try await Shell.runStreaming("orchard", args, onLine: { line in
                 FileHandle.standardError.write(Data((line + "\n").utf8))

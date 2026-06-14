@@ -6,8 +6,8 @@ import GraftCore
 /// `graft run` — start the pool supervisor and keep pools filled until stopped.
 struct Run: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "run",
-        abstract: "Start the pool supervisor (runs until stopped)."
+        commandName: "tend",
+        abstract: "Tend the pool — supervise runners until stopped (+ --monitor to report health)."
     )
 
     @Option(name: .shortAndLong, help: "Config path (overrides profile resolution).")
@@ -21,6 +21,9 @@ struct Run: AsyncParsableCommand {
 
     @Flag(name: .shortAndLong, help: "Echo every step (runner output + events) above the live status, instead of just the spinner.")
     var verbose = false
+
+    @Flag(help: "Also report health to the configured webhook + logs while tending (the health monitor).")
+    var monitor = false
 
     func run() async throws {
         let path = GraftConfig.resolvePath(explicit: config, profile: profile)
@@ -62,24 +65,46 @@ struct Run: AsyncParsableCommand {
         let reporter: RunnerStatusReporter? = dashboard.map { (d: LiveDashboard) -> RunnerStatusReporter in
             { tag, vm, phase in d.update(slot: tag, vm: vm, phase: phase) }
         }
+        let secrets = KeychainSecretStore(scope: scope)
         let supervisor = PoolSupervisor(
             config: cfg,
             provider: provider,
-            secrets: KeychainSecretStore(scope: scope),
+            secrets: secrets,
             status: reporter
         )
 
         try Daemon.writePidfile()
         defer { Daemon.removePidfile() }
 
+        // Optional in-process health monitor (detection-only). Co-located with the trunk
+        // by construction, so it shares the supervisor's state file and is unambiguously
+        // the trunk for the state-backed detectors (wedged-slot, deadwood).
+        func startMonitorIfRequested() -> Task<Void, Never>? {
+            guard monitor else { return nil }
+            let detectors = HealthMonitorFactory.detectors(
+                config: cfg, provider: provider, secrets: secrets, isTrunk: true)
+            let reporter = HealthReporter(sinks: HealthMonitorFactory.sinks(monitor: cfg.monitor))
+            let heartbeatSeconds = cfg.monitor?.heartbeatSeconds ?? 300
+            let monitor = HealthMonitor(
+                detectors: detectors, reporter: reporter,
+                interval: .seconds(cfg.monitor?.intervalSeconds ?? 60),
+                heartbeatSeconds: heartbeatSeconds > 0 ? TimeInterval(heartbeatSeconds) : nil)
+            Log.info("tending in-process — \(detectors.count) detectors, \(cfg.monitor?.webhooks.count ?? 0) webhook(s)")
+            return Task { await monitor.run() }
+        }
+
         Log.info("graft starting — \(cfg.pools.count) pool(s), \(scope.rawValue) keychain\(daemon ? ", daemon" : "")")
         let task = Task { await supervisor.run() }
+        let monitorTask = startMonitorIfRequested()
         let sources = installSignalHandlers {
             Log.info("signal received — shutting down gracefully")
             task.cancel()
+            monitorTask?.cancel()
         }
         defer { sources.forEach { $0.cancel() } }
         await task.value
+        monitorTask?.cancel()
+        _ = await monitorTask?.value
     }
 
     /// Pick the VM backend from config: local Tart (single host) or an Orchard

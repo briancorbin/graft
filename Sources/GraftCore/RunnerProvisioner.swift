@@ -1,34 +1,17 @@
 import Foundation
 
-/// Installs and runs the ephemeral GitHub Actions runner inside a VM via the
-/// provider's exec channel (no SSH). With JIT config there's no `config.sh` step —
-/// the runner registers, runs one job, self-deregisters, and exits. We just stream
-/// its logs and wait for that exit.
-public struct RunnerProvisioner: Sendable {
-    private let provider: any VMProvider
-
-    public init(provider: any VMProvider) {
-        self.provider = provider
-    }
-
-    /// Wait for the guest, then run the ephemeral runner with `jitConfig`. Blocks
-    /// until the runner's single job finishes; returns its exit code. `onLine`, if
-    /// given, receives the runner's output line-by-line.
-    public func runEphemeralRunner(on vm: RunningVM, jitConfig: String, onLine: (@Sendable (String) -> Void)?) async throws -> Int32 {
-        try await provider.waitForGuest(vm)
-        let script = Self.provisionScript(os: vm.os, jitConfig: jitConfig)
-        return try await provider.execStreaming(on: vm, script: script, onLine: onLine)
-    }
-
-    /// The bash run inside the guest. Uses a pre-baked runner at `~/actions-runner`
-    /// if present (cirruslabs runner images ship one), otherwise downloads the
-    /// latest release. Version is fetched, never hardcoded.
-    ///
-    /// TODO(real-VM): confirm on a booted VM — (1) the runner dir path on cirruslabs
-    /// images, (2) the release asset naming, (3) that `bash -s` over `tart exec`
-    /// propagates the runner's exit code. Built from the design doc; unverified
-    /// against a live guest.
-    static func provisionScript(os: GuestOS, jitConfig: String) -> String {
+/// Builds the bootstrap script that launches the ephemeral GitHub Actions runner inside a
+/// leaf. The script is handed to the leaf at create time — Orchard runs it as the VM's
+/// StartupScript (the *worker*, local to the VM), local Tart runs it via `tart exec` — so the
+/// supervisor never execs into the guest. With JIT config there's no `config.sh`: the runner
+/// registers, runs one job, self-deregisters, and exits. We launch it **detached** so it
+/// survives the launching session closing, then the supervisor watches it via GitHub.
+public enum RunnerProvisioner {
+    /// The bash run inside the guest. Uses a pre-baked runner at `~/actions-runner` if
+    /// present (a properly-baked sapling ships one), otherwise downloads the latest release.
+    /// The final launch is detached (`nohup … & disown`, portable across macOS — which has no
+    /// `setsid` — and Linux) so it outlives the worker's/host's exec session.
+    public static func provisionScript(os: GuestOS, jitConfig: String) -> String {
         let arch: String
         switch os {
         case .macOS: arch = "osx-arm64"      // Tart guests on Apple Silicon are arm64
@@ -53,8 +36,10 @@ public struct RunnerProvisioner: Sendable {
         fi
 
         cd "$RUNNER_DIR"
-        echo "graft: starting ephemeral runner…"
-        exec ./run.sh --jitconfig "$JITCONFIG"
+        echo "graft: launching ephemeral runner (detached)…"
+        nohup ./run.sh --jitconfig "$JITCONFIG" >"$RUNNER_DIR/runner.log" 2>&1 </dev/null &
+        disown
+        echo "graft: runner launched (pid $!)"
         """
     }
 }

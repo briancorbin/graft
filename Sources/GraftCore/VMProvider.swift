@@ -1,5 +1,9 @@
 import Foundation
 
+/// A fresh graft-managed VM name. Shared so every backend + the supervisor name VMs
+/// identically — the `graft-` prefix is what the orphan sweeps filter on.
+public func makeGraftVMName() -> String { "graft-" + UUID().uuidString.lowercased() }
+
 /// Per-pool VM sizing — CPU cores + memory (MB). `nil` means "let the backend
 /// default." A pool declares these for its workload (a lint pool is small, an e2e pool
 /// is fat), independent of the image: same toolchain image, different shapes. On the
@@ -13,6 +17,15 @@ public struct VMResources: Sendable, Equatable {
     public var isEmpty: Bool { cpu == nil && memory == nil }
 }
 
+/// Progress emitted during `acquire`, so the supervisor can show an honest phase:
+/// `scheduling` = submitted, waiting for the backend to place the leaf on a branch (the
+/// Orchard "pending" window); `booting` = placed/cloned, the guest is coming up. Local Tart
+/// has no controller, so it goes straight to `booting`.
+public enum AcquireProgress: Sendable {
+    case scheduling
+    case booting
+}
+
 /// The central abstraction. The pool supervisor never calls `tart` directly — it
 /// always goes through a provider. This is what makes Orchard (multi-host) or a
 /// future native backend (Twig) a drop-in swap rather than a rewrite.
@@ -21,13 +34,14 @@ public protocol VMProvider: Sendable {
     /// For local Tart + macOS this is Apple's hard 2-VM ceiling minus what's running.
     func capacity(for os: GuestOS) async -> Int
 
-    /// Clone + boot a VM from `image`, wait for it to get an IP, and return it.
+    /// Clone + boot a VM named `name` from `image`, wait for it to get an IP, and return it.
     /// `os` is declared by the caller (from pool config) — providers don't probe.
-    /// `mounts` are host directory shares passed to the VM at boot; `network` selects
-    /// the VM's networking mode (default shared NAT); `resources` sizes the leaf
-    /// (CPU/memory) per the pool — on Orchard it's also requested from the scheduler so
-    /// a branch won't be over-packed.
-    func acquire(image: String, os: GuestOS, mounts: [Mount], network: VMNetwork, resources: VMResources) async throws -> RunningVM
+    /// `mounts` are host directory shares; `network` selects the VM's networking mode;
+    /// `resources` sizes the leaf (CPU/memory) per the pool. `startupScript`, if given, is
+    /// run on the leaf **detached** (the runner bootstrap): Orchard delivers it via the VM's
+    /// StartupScript (the worker runs it, local to the VM); local Tart runs it via `tart exec`.
+    /// The supervisor never holds a connection to the guest — it monitors via GitHub afterward.
+    func acquire(name: String, image: String, os: GuestOS, mounts: [Mount], network: VMNetwork, resources: VMResources, startupScript: String?, onProgress: (@Sendable (AcquireProgress) -> Void)?) async throws -> RunningVM
 
     /// Stop and destroy a VM. Idempotent where possible — releasing an
     /// already-gone VM should not throw.
@@ -51,15 +65,29 @@ public protocol VMProvider: Sendable {
     /// how to enumerate its own (local Tart by name prefix, Orchard via its API).
     /// Default no-op for backends that don't need it.
     func sweepOrphans() async
+
+    /// Names of the graft-managed VMs this backend currently has. The health monitor
+    /// diffs this against the supervisor's tracked set to spot "deadwood" — a managed
+    /// VM no slot owns. Default `[]` (a backend that strands nothing).
+    func managedVMNames() async -> [String]
 }
 
 extension VMProvider {
     /// Most backends don't strand host-side state; opt in by overriding.
     public func sweepOrphans() async {}
 
-    /// Convenience: acquire with default networking + backend-default sizing.
+    /// Default: this backend doesn't track managed VMs by name.
+    public func managedVMNames() async -> [String] { [] }
+
+    /// Convenience: a fresh name, default networking + backend-default sizing, no startup
+    /// script, no progress. (For one-off VMs like `graft leaf create`.)
     public func acquire(image: String, os: GuestOS, mounts: [Mount] = []) async throws -> RunningVM {
-        try await acquire(image: image, os: os, mounts: mounts, network: .nat, resources: .none)
+        try await acquire(name: makeGraftVMName(), image: image, os: os, mounts: mounts, network: .nat, resources: .none, startupScript: nil, onProgress: nil)
+    }
+
+    /// Convenience: explicit sizing, no startup script, no progress callback.
+    public func acquire(image: String, os: GuestOS, mounts: [Mount], network: VMNetwork, resources: VMResources) async throws -> RunningVM {
+        try await acquire(name: makeGraftVMName(), image: image, os: os, mounts: mounts, network: network, resources: resources, startupScript: nil, onProgress: nil)
     }
 
     /// Convenience: unbounded exec (kept for callers that don't need a timeout).
