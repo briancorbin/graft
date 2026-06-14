@@ -11,8 +11,8 @@ import GraftCore
 struct Tree: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "tree",
-        abstract: "Plant, tend, and inspect the tree — trunk, branches, and leaves.",
-        subcommands: [Plant.self, Branch.self, Bonsai.self, Prune.self, Status.self, Branches.self, Leaves.self]
+        abstract: "Inspect the tree — trunk, branches, and leaves.",
+        subcommands: [Status.self, Branches.self, Leaves.self]
     )
 }
 

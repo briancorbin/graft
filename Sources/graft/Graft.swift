@@ -10,6 +10,7 @@ struct Graft: AsyncParsableCommand {
         version: "0.3.0",
         subcommands: [
             Init.self, Run.self, Status.self, Stop.self, Arborist.self,
+            Tree.Plant.self, Tree.Branch.self, Tree.Prune.self, Tree.Bonsai.self,
             Profile.self, Pool.self, Leaf.self, ConfigCommand.self, Secrets.self,
             Runners.self, Image.self, Dev.self, Tree.self,
         ]
