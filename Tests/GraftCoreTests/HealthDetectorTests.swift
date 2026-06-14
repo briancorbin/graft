@@ -35,9 +35,9 @@ struct HealthDetectorTests {
             namePrefix: "graft-"
         ) { _ in
             [
-                .init(id: 1, name: "graft-online", status: "online"),
-                .init(id: 2, name: "graft-zombie", status: "offline"),
-                .init(id: 3, name: "someone-elses-runner", status: "offline"),
+                .init(id: 1, name: "graft-online", status: "online", busy: false),
+                .init(id: 2, name: "graft-zombie", status: "offline", busy: false),
+                .init(id: 3, name: "someone-elses-runner", status: "offline", busy: false),
             ]
         }
         let events = await detector.probe()
@@ -56,8 +56,8 @@ struct HealthDetectorTests {
             owned: { ["graft-live"] }            // the supervisor's live runner
         ) { _ in
             [
-                .init(id: 1, name: "graft-live", status: "offline"),   // owned + briefly offline → skip
-                .init(id: 2, name: "graft-husk", status: "offline"),   // not owned → genuine husk
+                .init(id: 1, name: "graft-live", status: "offline", busy: false),   // owned + briefly offline → skip
+                .init(id: 2, name: "graft-husk", status: "offline", busy: false),   // not owned → genuine husk
             ]
         }
         let events = await detector.probe()

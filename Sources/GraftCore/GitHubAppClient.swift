@@ -77,6 +77,7 @@ public struct GitHubAppClient: Sendable {
         public let id: Int
         public let name: String
         public let status: String   // "online" | "offline"
+        public let busy: Bool       // running a job right now
         public var isOffline: Bool { status.lowercased() == "offline" }
     }
 
@@ -91,6 +92,25 @@ public struct GitHubAppClient: Sendable {
         )
         struct Response: Decodable { let runners: [Runner] }
         return try Self.snakeDecoder.decode(Response.self, from: data).runners
+    }
+
+    /// Best-effort: the name of the job a runner is currently running, or nil. Repo targets
+    /// only (an org has no single workflow-runs endpoint). This drives a dashboard label, so
+    /// it swallows any error and returns nil rather than throwing.
+    public func currentRunningJob(runnerName: String, target: GitHubTarget) async -> String? {
+        guard case .repo = target, let token = try? await installationAccessToken(for: target) else { return nil }
+        struct Runs: Decodable { let workflowRuns: [Run]; struct Run: Decodable { let id: Int } }
+        struct Jobs: Decodable { let jobs: [Job]; struct Job: Decodable { let name: String; let status: String; let runnerName: String? } }
+        guard let runsData = try? await request("GET", path: "\(target.apiPath)/actions/runs?status=in_progress&per_page=30", bearer: token),
+              let runs = try? Self.snakeDecoder.decode(Runs.self, from: runsData) else { return nil }
+        for run in runs.workflowRuns {
+            guard let jobsData = try? await request("GET", path: "\(target.apiPath)/actions/runs/\(run.id)/jobs?per_page=50", bearer: token),
+                  let jobs = try? Self.snakeDecoder.decode(Jobs.self, from: jobsData) else { continue }
+            if let job = jobs.jobs.first(where: { $0.runnerName == runnerName && $0.status == "in_progress" }) {
+                return job.name
+            }
+        }
+        return nil
     }
 
     /// Targets this App can actually reach: `org:<login>` for every org the App is

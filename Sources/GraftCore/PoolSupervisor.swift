@@ -9,6 +9,8 @@ public protocol JITConfigProvider: Sendable {
     /// runner come online and then finish. This is how it monitors a leaf without ever
     /// exec-ing into the guest.
     func listRunners(target: GitHubTarget) async throws -> [GitHubAppClient.Runner]
+    /// Best-effort name of the job a runner is currently running (for the dashboard label).
+    func currentRunningJob(runnerName: String, target: GitHubTarget) async -> String?
 }
 
 extension GitHubAppClient: JITConfigProvider {}
@@ -272,20 +274,27 @@ public actor PoolSupervisor {
         let deadline = Date().addingTimeInterval(Self.registrationDeadline)
         var sawOnline = false
         while !Task.isCancelled {
-            switch await runnerLiveness(name: vm, github: github, target: target) {
-            case .online:
-                sawOnline = true
-                recordPhase(tag: tag, pool: pool, vm: vm, phase: .ready)
-            case .offline:
-                if sawOnline { Log.info("[\(tag)] runner \(vm) finished"); return }
-                if Date() > deadline {
+            if let runners = try? await github.listRunners(target: target) {
+                if let runner = runners.first(where: { $0.name == vm }), !runner.isOffline {
+                    sawOnline = true
+                    if runner.busy {
+                        // Tier 1: show what it's actually running (best-effort; repo targets).
+                        let job = await github.currentRunningJob(runnerName: vm, target: target)
+                        recordPhase(tag: tag, pool: pool, vm: vm, phase: .busy(job ?? "a job"))
+                    } else {
+                        recordPhase(tag: tag, pool: pool, vm: vm, phase: .ready)
+                    }
+                } else if sawOnline {
+                    Log.info("[\(tag)] runner \(vm) finished")
+                    return                      // was online, now gone → job done
+                } else if Date() > deadline {
                     Log.warn("[\(tag)] runner \(vm) never registered within \(Int(Self.registrationDeadline))s — replacing")
-                    return
+                    return                      // never came online → replace
+                } else {
+                    recordPhase(tag: tag, pool: pool, vm: vm, phase: .starting)
                 }
-                recordPhase(tag: tag, pool: pool, vm: vm, phase: .starting)
-            case .unknown:
-                break   // GitHub unreachable — don't decide; keep waiting
             }
+            // listRunners failed (GitHub unreachable) → don't decide; keep waiting.
             do { try await Task.sleep(for: Self.runnerPollInterval) } catch { return }
         }
     }

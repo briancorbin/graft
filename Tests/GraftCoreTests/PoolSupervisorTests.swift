@@ -73,8 +73,9 @@ private struct MockJIT: JITConfigProvider {
     /// Every minted runner reads as online — so each slot sees its runner come up and then
     /// holds (polling) until shutdown, mirroring the old BlockingRunner.
     func listRunners(target: GitHubTarget) async throws -> [GitHubAppClient.Runner] {
-        (await recorder.minted).map { GitHubAppClient.Runner(id: 0, name: $0, status: "online") }
+        (await recorder.minted).map { GitHubAppClient.Runner(id: 0, name: $0, status: "online", busy: false) }
     }
+    func currentRunningJob(runnerName: String, target: GitHubTarget) async -> String? { nil }
 }
 
 // MARK: - Tests
