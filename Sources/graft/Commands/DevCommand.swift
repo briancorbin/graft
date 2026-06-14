@@ -2,22 +2,22 @@ import ArgumentParser
 import Foundation
 import GraftCore
 
-/// `graft dev` — spin up or resume a dev VM from a golden image.
+/// `graft nest` — spin up or resume a nest (dev box) from a sapling.
 ///
-///   graft dev                 picker: resume a box / clone a repo / mount here / scratch
-///   graft dev <owner/repo>    clone a repo into a persistent box and open it
-///   graft dev <box>           resume a persistent box
-///   graft dev .               mount the current directory into an ephemeral box
-///   graft dev ls              list dev boxes
-///   graft dev rm [box]        remove a box
+///   graft nest                 picker: resume a box / clone a repo / mount here / scratch
+///   graft nest <owner/repo>    clone a repo into a persistent box and open it
+///   graft nest <box>           resume a persistent box
+///   graft nest .               mount the current directory into an ephemeral box
+///   graft nest ls              list nests
+///   graft nest rm [box]        remove a box
 ///
 /// Model: **clone → persistent + resumable** (your repo + state live in the box);
 /// **mount / scratch → ephemeral** (your files are the source of truth on the host).
 /// Shell is the default; `--code` opens VS Code over Remote-SSH.
 struct Dev: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "dev",
-        abstract: "Spin up or resume a dev VM from a golden image.",
+        commandName: "nest",
+        abstract: "Spin up or resume a nest — a dev box — from a sapling.",
         subcommands: [Open.self, List.self, Remove.self],
         defaultSubcommand: Open.self
     )
